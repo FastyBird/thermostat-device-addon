@@ -6,7 +6,7 @@
     <arg name="cache" value="./../var/tools/PHP_CodeSniffer/cache.dat"/>
 
     <!-- Import coding-standard -->
-    <rule ref="./vendor/orisai/coding-standard/src/ruleset-8.1.xml">
+    <rule ref="./vendor/orisai/coding-standard/src/ruleset-8.2.xml">
         <exclude name="SlevomatCodingStandard.Commenting.ForbiddenAnnotations.AnnotationForbidden"/>
 
         <exclude name="SlevomatCodingStandard.Commenting.DocCommentSpacing.IncorrectLinesCountBetweenDifferentAnnotationsTypes"/>
@@ -17,10 +17,10 @@
     <rule ref="SlevomatCodingStandard.Files.TypeNameMatchesFileName">
         <properties>
             <property name="rootNamespaces" type="array">
-                <element key="src" value="FastyBird\Addon\ThermostatDevice"/>
-                <element key="tests/cases/unit" value="FastyBird\Addon\ThermostatDevice\Tests\Cases\Unit"/>
-                <element key="tests/fixtures/dummy" value="FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy"/>
-                <element key="tests/tools" value="FastyBird\Addon\ThermostatDevice\Tests\Tools"/>
+                <element key="src" value="FastyBird\Addon\VirtualThermostat"/>
+                <element key="tests/cases/unit" value="FastyBird\Addon\VirtualThermostat\Tests\Cases\Unit"/>
+                <element key="tests/fixtures/dummy" value="FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy"/>
+                <element key="tests/tools" value="FastyBird\Addon\VirtualThermostat\Tests\Tools"/>
             </property>
         </properties>
     </rule>

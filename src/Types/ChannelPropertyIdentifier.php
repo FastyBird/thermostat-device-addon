@@ -6,73 +6,74 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  * @since          1.0.0
  *
  * @date           15.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Types;
-
-use Consistence;
-use function strval;
+namespace FastyBird\Addon\VirtualThermostat\Types;
 
 /**
  * Channel property identifier types
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
  */
-class ChannelPropertyIdentifier extends Consistence\Enum\Enum
+enum ChannelPropertyIdentifier: string
 {
 
-	public const OPENING_SENSOR = 'opening_sensor';
+	// ACTORS & SENSORS
+	case HEATER_ACTOR = 'heater_actor';
 
-	public const HEATER_ACTOR = 'heater_actor';
+	case COOLER_ACTOR = 'cooler_actor';
 
-	public const COOLER_ACTOR = 'cooler_actor';
+	case ROOM_TEMPERATURE_SENSOR = 'room_temperature_sensor';
 
-	public const TARGET_SENSOR = 'target_sensor';
+	case FLOOR_TEMPERATURE_SENSOR = 'floor_temperature_sensor';
 
-	public const FLOOR_SENSOR = 'floor_sensor';
+	case ROOM_HUMIDITY_SENSOR = 'room_humidity_sensor';
 
-	public const MAXIMUM_FLOOR_TEMPERATURE = 'max_floor_temperature';
+	case OPENING_SENSOR = 'opening_sensor';
 
-	public const ACTUAL_FLOOR_TEMPERATURE = 'actual_floor_temperature';
+	// CONFIGURATION
+	case MAXIMUM_FLOOR_TEMPERATURE = 'max_floor_temperature';
 
-	public const TARGET_TEMPERATURE = 'target_temperature';
+	case LOW_TARGET_TEMPERATURE_TOLERANCE = 'low_target_temperature_tolerance';
 
-	public const ACTUAL_TEMPERATURE = 'actual_temperature';
+	case HIGH_TARGET_TEMPERATURE_TOLERANCE = 'high_target_temperature_tolerance';
 
-	public const COOLING_THRESHOLD_TEMPERATURE = 'cooling_threshold_temperature';
+	case MINIMUM_CYCLE_DURATION = 'min_cycle_duration';
 
-	public const HEATING_THRESHOLD_TEMPERATURE = 'heating_threshold_temperature';
+	case UNIT = 'unit';
 
-	public const LOW_TARGET_TEMPERATURE_TOLERANCE = 'low_target_temperature_tolerance';
+	// PRESET
+	case TARGET_ROOM_TEMPERATURE = 'target_room_temperature';
 
-	public const HIGH_TARGET_TEMPERATURE_TOLERANCE = 'high_target_temperature_tolerance';
+	case TARGET_ROOM_HUMIDITY = 'target_room_humidity';
 
-	public const MINIMUM_CYCLE_DURATION = 'min_cycle_duration';
+	case COOLING_THRESHOLD_TEMPERATURE = 'cooling_threshold_temperature';
 
-	public const PRESET_MODE = 'preset_mode';
+	case HEATING_THRESHOLD_TEMPERATURE = 'heating_threshold_temperature';
 
-	public const HVAC_MODE = 'hvac_mode';
+	// STATE
+	case CURRENT_FLOOR_TEMPERATURE = 'current_floor_temperature';
 
-	public const HVAC_STATE = 'hvac_state';
+	case CURRENT_ROOM_TEMPERATURE = 'current_room_temperature';
 
-	public const UNIT = 'unit';
+	case CURRENT_ROOM_HUMIDITY = 'current_room_humidity';
 
-	public function getValue(): string
-	{
-		return strval(parent::getValue());
-	}
+	case CURRENT_OPENINGS_STATE = 'current_openings_state';
 
-	public function __toString(): string
-	{
-		return self::getValue();
-	}
+	case FLOOR_OVERHEATING = 'floor_overheating';
+
+	case PRESET_MODE = 'preset_mode';
+
+	case HVAC_MODE = 'hvac_mode';
+
+	case HVAC_STATE = 'hvac_state';
 
 }

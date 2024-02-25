@@ -6,36 +6,37 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Schemas
  * @since          1.0.0
  *
  * @date           23.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Schemas\Channels;
+namespace FastyBird\Addon\VirtualThermostat\Schemas\Channels;
 
-use FastyBird\Addon\ThermostatDevice\Entities;
-use FastyBird\Addon\ThermostatDevice\Schemas;
+use FastyBird\Addon\VirtualThermostat\Entities;
+use FastyBird\Addon\VirtualThermostat\Schemas;
+use FastyBird\Connector\Virtual\Schemas as VirtualSchemas;
 use FastyBird\Library\Metadata\Types as MetadataTypes;
 
 /**
- * Virtual thermostat preset channel entity schema
+ * Preset channel entity schema
  *
  * @template T of Entities\Channels\Preset
- * @extends  Schemas\ThermostatChannel<T>
+ * @extends  VirtualSchemas\Channels\Channel<T>
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Schemas
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
  */
-final class Preset extends Schemas\ThermostatChannel
+final class Preset extends VirtualSchemas\Channels\Channel
 {
 
 	/**
 	 * Define entity schema type string
 	 */
-	public const SCHEMA_TYPE = MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL . '/channel/' . Entities\Channels\Preset::TYPE;
+	public const SCHEMA_TYPE = MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value . '/channel/' . Entities\Channels\Preset::TYPE;
 
 	public function getEntityClass(): string
 	{

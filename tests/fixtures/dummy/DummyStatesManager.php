@@ -1,6 +1,6 @@
 <?php declare(strict_types = 1);
 
-namespace FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy;
+namespace FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy;
 
 use FastyBird\Module\Devices\States as DevicesStates;
 use Nette\Utils;

@@ -1,6 +1,6 @@
 <?php declare(strict_types = 1);
 
-namespace FastyBird\Addon\ThermostatDevice\Tests\Tools;
+namespace FastyBird\Addon\VirtualThermostat\Tests\Tools;
 
 use Doctrine\Common\EventManager;
 use Doctrine\DBAL;

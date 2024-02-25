@@ -6,57 +6,48 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  * @since          1.0.0
  *
  * @date           15.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Types;
-
-use Consistence;
-use function strval;
+namespace FastyBird\Addon\VirtualThermostat\Types;
 
 /**
  * Channel identifier types
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
  */
-class ChannelIdentifier extends Consistence\Enum\Enum
+enum ChannelIdentifier: string
 {
 
-	public const CONFIGURATION = 'configuration';
+	case CONFIGURATION = 'configuration';
 
-	public const PRESET_AWAY = 'preset_away';
+	case STATE = 'state';
 
-	public const PRESET_ECO = 'preset_eco';
+	case PRESET_MANUAL = 'preset_manual';
 
-	public const PRESET_HOME = 'preset_home';
+	case PRESET_AWAY = 'preset_away';
 
-	public const PRESET_COMFORT = 'preset_comfort';
+	case PRESET_ECO = 'preset_eco';
 
-	public const PRESET_SLEEP = 'preset_sleep';
+	case PRESET_HOME = 'preset_home';
 
-	public const PRESET_ANTI_FREEZE = 'preset_anti_freeze';
+	case PRESET_COMFORT = 'preset_comfort';
 
-	public const SENSORS = 'sensors';
+	case PRESET_SLEEP = 'preset_sleep';
 
-	public const ACTORS = 'actors';
+	case PRESET_ANTI_FREEZE = 'preset_anti_freeze';
 
-	public const OPENINGS = 'openings';
+	case SENSORS = 'sensors';
 
-	public function getValue(): string
-	{
-		return strval(parent::getValue());
-	}
+	case ACTORS = 'actors';
 
-	public function __toString(): string
-	{
-		return self::getValue();
-	}
+	case OPENINGS = 'openings';
 
 }

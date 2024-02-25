@@ -5,4 +5,4 @@ Thank you for testing, reporting and contributing.
 
 ***
 Homepage [https://www.fastybird.com](https://www.fastybird.com) and
-repository [https://github.com/fastybird/thermostat-device-addon](https://github.com/fastybird/thermostat-device-addon).
+repository [https://github.com/fastybird/virtual-thermostat-addon](https://github.com/fastybird/virtual-thermostat-addon).

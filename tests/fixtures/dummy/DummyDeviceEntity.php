@@ -1,26 +1,21 @@
 <?php declare(strict_types = 1);
 
-namespace FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy;
+namespace FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy;
 
 use Doctrine\ORM\Mapping as ORM;
+use FastyBird\Library\Application\Entities\Mapping as ApplicationMapping;
 use FastyBird\Module\Devices\Entities as DevicesEntities;
 
-/**
- * @ORM\Entity
- */
+#[ORM\Entity]
+#[ApplicationMapping\DiscriminatorEntry(name: self::TYPE)]
 class DummyDeviceEntity extends DevicesEntities\Devices\Device
 {
 
-	public const DEVICE_TYPE = 'dummy';
+	public const TYPE = 'dummy';
 
-	public function getType(): string
+	public static function getType(): string
 	{
-		return 'dummy';
-	}
-
-	public function getDiscriminatorName(): string
-	{
-		return 'dummy';
+		return self::TYPE;
 	}
 
 }

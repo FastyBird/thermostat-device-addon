@@ -4,7 +4,7 @@
 # @license        More in LICENSE.md
 # @copyright      https://www.fastybird.com
 # @author         Adam Kadlec <adam.kadlec@fastybird.com>
-# @package        FastyBird:ThermostatDeviceAddon!
+# @package        FastyBird:VirtualThermostatAddon!
 # @subpackage     config
 # @since          1.0.0
 #
@@ -15,16 +15,13 @@ php:
 
 extensions:
     contributteTranslation              : Contributte\Translation\DI\TranslationExtension
-    nettrineAnnotations                 : Nettrine\Annotations\DI\AnnotationsExtension
     nettrineCache                       : Nettrine\Cache\DI\CacheExtension
     nettrineDbal                        : Nettrine\DBAL\DI\DbalExtension
     nettrineOrm                         : Nettrine\ORM\DI\OrmExtension
-    nettrineOrmAnnotations              : Nettrine\ORM\DI\OrmAnnotationsExtension
+    nettrineOrmAttributes               : Nettrine\ORM\DI\OrmAttributesExtension
     nettrineOrmConsole                  : Nettrine\ORM\DI\OrmConsoleExtension
     nettrineOrmCache                    : Nettrine\ORM\DI\OrmCacheExtension
-    ipubDoctrineConsistence             : IPub\DoctrineConsistence\DI\DoctrineConsistenceExtension
     ipubDoctrineCrud                    : IPub\DoctrineCrud\DI\DoctrineCrudExtension
-    ipubDoctrineDynamicDiscriminatorMap : IPub\DoctrineDynamicDiscriminatorMap\DI\DoctrineDynamicDiscriminatorMapExtension
     ipubDoctrineTimestampable           : IPub\DoctrineTimestampable\DI\DoctrineTimestampableExtension
     ipubPhone                           : IPub\Phone\DI\PhoneExtension
     fbDateTimeFactory                   : FastyBird\DateTimeFactory\DI\DateTimeFactoryExtension
@@ -43,18 +40,19 @@ services:
             - addMiddleware(@fbJsonApi.middlewares.jsonapi)
 
     -
-        factory: FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy\DummyConnectorFactory
+        factory: FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy\DummyConnectorFactory
         tags: [connector_type: dummy]
-    - {factory: FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy\DummyConnectorSchema}
-    - {factory: FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy\DummyDeviceSchema}
+
+    - {factory: FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy\DummyConnectorSchema}
+    - {factory: FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy\DummyDeviceSchema}
 
     cache.storage: Nette\Caching\Storages\DevNullStorage
 
 decorator:
     Doctrine\Persistence\Mapping\Driver\MappingDriverChain:
         setup:
-            - addDriver(@nettrineOrmAnnotations.annotationDriver, 'FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy')
-    Doctrine\ORM\Mapping\Driver\AnnotationDriver:
+            - addDriver(@nettrineOrmAttributes.attributeDriver, 'FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy')
+    Doctrine\ORM\Mapping\Driver\AttributeDriver:
         setup:
             - addPaths([%appDir%/fixtures/dummy])
 
@@ -77,7 +75,7 @@ nettrineDbal:
         user: root
         password: root
         charset: utf8
-        wrapperClass: \FastyBird\Addon\ThermostatDevice\Tests\Tools\ConnectionWrapper
+        wrapperClass: \FastyBird\Addon\VirtualThermostat\Tests\Tools\ConnectionWrapper
 
         types:
             uuid_binary:
@@ -90,25 +88,23 @@ nettrineDbal:
         typesMapping:
             uuid_binary: binary
 
-nettrineAnnotations:
-    debug: %debugMode%
-    ignore:
-        - writable
-        - required
-        - module
-        - author
-        - subpackage
-        - package
-        - phpcsSuppress
+    debug:
+        panel: false
 
 nettrineOrm:
     configuration:
         proxyDir: %tempDir%/cache/doctrine.proxies
 
-nettrineOrmAnnotations:
+nettrineOrmAttributes:
     mapping: [
-        FastyBird\Addon\ThermostatDevice\Tests\Fixtures\Dummy: %appDir%/fixtures/dummy
+        FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy: %appDir%/fixtures/dummy
     ]
+
+fbMetadataLibrary:
+    documents:
+        mapping: [
+            FastyBird\Addon\VirtualThermostat\Tests\Fixtures\Dummy: %appDir%/fixtures/dummy
+        ]
 
 fbSimpleAuth:
     token:

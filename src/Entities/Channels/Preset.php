@@ -6,47 +6,70 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Entities
  * @since          1.0.0
  *
  * @date           20.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Entities\Channels;
+namespace FastyBird\Addon\VirtualThermostat\Entities\Channels;
 
 use Doctrine\ORM\Mapping as ORM;
-use FastyBird\Addon\ThermostatDevice\Entities;
-use FastyBird\Addon\ThermostatDevice\Types;
+use FastyBird\Addon\VirtualThermostat\Entities;
+use FastyBird\Addon\VirtualThermostat\Types;
+use FastyBird\Connector\Virtual\Entities as VirtualEntities;
+use FastyBird\Library\Application\Entities\Mapping as ApplicationMapping;
 use FastyBird\Library\Metadata\Exceptions as MetadataExceptions;
+use FastyBird\Library\Metadata\Types as MetadataTypes;
 use FastyBird\Module\Devices\Entities as DevicesEntities;
+use Ramsey\Uuid;
+use TypeError;
+use ValueError;
+use function assert;
 use function floatval;
 use function is_numeric;
 
-/**
- * @ORM\Entity
- */
-class Preset extends Entities\ThermostatChannel
+#[ORM\Entity]
+#[ApplicationMapping\DiscriminatorEntry(name: self::TYPE)]
+class Preset extends VirtualEntities\Channels\Channel
 {
 
-	public const TYPE = 'thermostat-device-addon-preset';
+	public const TYPE = 'virtual-thermostat-addon-preset';
 
-	public function getType(): string
+	public function __construct(
+		Entities\Devices\Device $device,
+		string $identifier,
+		string|null $name = null,
+		Uuid\UuidInterface|null $id = null,
+	)
+	{
+		parent::__construct($device, $identifier, $name, $id);
+	}
+
+	public static function getType(): string
 	{
 		return self::TYPE;
 	}
 
-	public function getDiscriminatorName(): string
+	public function getSource(): MetadataTypes\Sources\Addon
 	{
-		return self::TYPE;
+		return MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT;
+	}
+
+	public function getDevice(): Entities\Devices\Device
+	{
+		assert($this->device instanceof Entities\Devices\Device);
+
+		return $this->device;
 	}
 
 	public function getTargetTemp(): DevicesEntities\Channels\Properties\Dynamic|null
 	{
 		$property = $this->properties
 			->filter(
-			// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
-				static fn (DevicesEntities\Channels\Properties\Property $property): bool => $property->getIdentifier() === Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE
+				// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
+				static fn (DevicesEntities\Channels\Properties\Property $property): bool => $property->getIdentifier() === Types\ChannelPropertyIdentifier::TARGET_ROOM_TEMPERATURE->value
 			)
 			->first();
 
@@ -60,13 +83,15 @@ class Preset extends Entities\ThermostatChannel
 	/**
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	public function getCoolingThresholdTemp(): float|null
 	{
 		$property = $this->properties
 			->filter(
-			// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
-				static fn (DevicesEntities\Channels\Properties\Property $property): bool => $property->getIdentifier() === Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE
+				// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
+				static fn (DevicesEntities\Channels\Properties\Property $property): bool => $property->getIdentifier() === Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE->value
 			)
 			->first();
 
@@ -83,13 +108,15 @@ class Preset extends Entities\ThermostatChannel
 	/**
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	public function getHeatingThresholdTemp(): float|null
 	{
 		$property = $this->properties
 			->filter(
-			// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
-				static fn (DevicesEntities\Channels\Properties\Property $property): bool => $property->getIdentifier() === Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE
+				// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
+				static fn (DevicesEntities\Channels\Properties\Property $property): bool => $property->getIdentifier() === Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE->value
 			)
 			->first();
 

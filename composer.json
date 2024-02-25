@@ -1,5 +1,5 @@
 {
-  "name": "fastybird/thermostat-device-addon",
+  "name": "fastybird/virtual-thermostat-addon",
   "type": "fastybird-addon",
   "description": "FastyBird IoT virtual thermostat device addon",
   "keywords": [
@@ -29,21 +29,21 @@
   "support": {
     "email": "code@fastybird.com",
     "issues": "https://github.com/FastyBird/fastybird/issues",
-    "source": "https://github.com/FastyBird/thermostat-device-addon"
+    "source": "https://github.com/FastyBird/virtual-thermostat-addon"
   },
   "require": {
-    "php": ">=8.1.0",
+    "php": ">=8.2.0",
     "contributte/console": "^0.9",
     "contributte/monolog": "^0.5",
     "contributte/translation": "^2.0",
     "cweagans/composer-patches": "^1.7",
     "doctrine/orm": "2.15.*",
-    "fastybird/bootstrap-library": "dev-main",
+    "fastybird/application-library": "dev-main",
     "fastybird/datetime-factory": "^0.6",
     "fastybird/devices-module": "dev-main",
     "fastybird/metadata-library": "dev-main",
     "fastybird/virtual-connector": "dev-main",
-    "ipub/doctrine-crud": "^3.0",
+    "ipub/doctrine-crud": "^4.0",
     "nette/di": "^3.0",
     "psr/log": "^3.0",
     "ramsey/uuid": "^4.5",
@@ -72,15 +72,15 @@
   },
   "autoload": {
     "psr-4": {
-      "FastyBird\\Addon\\ThermostatDevice\\": "src/"
+      "FastyBird\\Addon\\VirtualThermostat\\": "src/"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "FastyBird\\Addon\\ThermostatDevice\\Tests\\Cases\\Unit\\": "tests/cases/unit",
-      "FastyBird\\Addon\\ThermostatDevice\\Tests\\Fixtures\\": "tests/fixtures",
-      "FastyBird\\Addon\\ThermostatDevice\\Tests\\Fixtures\\Dummy\\": "tests/fixtures/dummy",
-      "FastyBird\\Addon\\ThermostatDevice\\Tests\\Tools\\": "tests/tools"
+      "FastyBird\\Addon\\VirtualThermostat\\Tests\\Cases\\Unit\\": "tests/cases/unit",
+      "FastyBird\\Addon\\VirtualThermostat\\Tests\\Fixtures\\": "tests/fixtures",
+      "FastyBird\\Addon\\VirtualThermostat\\Tests\\Fixtures\\Dummy\\": "tests/fixtures/dummy",
+      "FastyBird\\Addon\\VirtualThermostat\\Tests\\Tools\\": "tests/tools"
     }
   },
   "config": {
@@ -109,12 +109,6 @@
       }
     }
   },
-  "repositories": [
-    {
-      "type": "vcs",
-      "url": "https://github.com/mathsolver/mathsolver.git"
-    }
-  ],
   "minimum-stability": "dev",
   "prefer-stable": true
 }

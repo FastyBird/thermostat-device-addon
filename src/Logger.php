@@ -6,14 +6,14 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     common
  * @since          1.0.0
  *
  * @date           17.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice;
+namespace FastyBird\Addon\VirtualThermostat;
 
 use Monolog;
 use Psr\Log;
@@ -22,7 +22,7 @@ use Stringable;
 /**
  * Connector logger
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     common
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
@@ -37,7 +37,7 @@ final class Logger implements Log\LoggerInterface
 	)
 	{
 		$this->logger = $logger instanceof Monolog\Logger
-			? $logger->withName(DI\ThermostatDeviceExtension::NAME)
+			? $logger->withName(DI\VirtualThermostatExtension::NAME)
 			: $logger;
 	}
 

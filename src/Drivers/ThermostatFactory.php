@@ -6,23 +6,23 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Drivers
  * @since          1.0.0
  *
  * @date           16.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Drivers;
+namespace FastyBird\Addon\VirtualThermostat\Drivers;
 
-use FastyBird\Addon\ThermostatDevice\Entities;
+use FastyBird\Addon\VirtualThermostat\Entities;
 use FastyBird\Connector\Virtual\Drivers\DriverFactory;
-use FastyBird\Library\Metadata\Documents as MetadataDocuments;
+use FastyBird\Module\Devices\Documents as DevicesDocuments;
 
 /**
  * Thermostat service factory
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Drivers
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
@@ -30,8 +30,8 @@ use FastyBird\Library\Metadata\Documents as MetadataDocuments;
 interface ThermostatFactory extends DriverFactory
 {
 
-	public const DEVICE_TYPE = Entities\ThermostatDevice::TYPE;
+	public const DEVICE_TYPE = Entities\Devices\Device::TYPE;
 
-	public function create(MetadataDocuments\DevicesModule\Device $device): Thermostat;
+	public function create(DevicesDocuments\Devices\Device $device): Thermostat;
 
 }

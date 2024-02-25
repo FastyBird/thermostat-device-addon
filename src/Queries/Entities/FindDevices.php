@@ -6,25 +6,25 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Queries
  * @since          1.0.0
  *
- * @date           15.10.23
+ * @date           05.02.24
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Queries\Entities;
+namespace FastyBird\Addon\VirtualThermostat\Queries\Entities;
 
-use FastyBird\Addon\ThermostatDevice\Entities;
+use FastyBird\Addon\VirtualThermostat\Entities;
 use FastyBird\Connector\Virtual\Queries as VirtualQueries;
 
 /**
  * Find thermostat devices entities query
  *
- * @template T of Entities\ThermostatDevice
+ * @template T of Entities\Devices\Device
  * @extends  VirtualQueries\Entities\FindDevices<T>
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Queries
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>

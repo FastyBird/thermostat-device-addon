@@ -6,45 +6,30 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  * @since          1.0.0
  *
  * @date           22.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Types;
-
-use Consistence;
-use function strval;
+namespace FastyBird\Addon\VirtualThermostat\Types;
 
 /**
  * HVAC state types
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
  */
-class HvacState extends Consistence\Enum\Enum
+enum HvacState: string
 {
 
-	public const INACTIVE = 'inactive';
+	case OFF = 'off';
 
-	public const OFF = 'off';
+	case COOLING = 'cooling';
 
-	public const COOLING = 'cooling';
-
-	public const HEATING = 'heating';
-
-	public function getValue(): string
-	{
-		return strval(parent::getValue());
-	}
-
-	public function __toString(): string
-	{
-		return self::getValue();
-	}
+	case HEATING = 'heating';
 
 }

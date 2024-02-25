@@ -6,53 +6,40 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  * @since          1.0.0
  *
  * @date           15.10.22
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Types;
-
-use Consistence;
-use function strval;
+namespace FastyBird\Addon\VirtualThermostat\Types;
 
 /**
  * Presets types
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Types
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
  */
-class Preset extends Consistence\Enum\Enum
+enum Preset: string
 {
 
-	public const AUTO = 'auto';
+	case AUTO = 'auto';
 
-	public const MANUAL = 'manual';
+	case MANUAL = 'manual';
 
-	public const AWAY = 'away';
+	case AWAY = 'away';
 
-	public const ECO = 'eco';
+	case ECO = 'eco';
 
-	public const HOME = 'home';
+	case HOME = 'home';
 
-	public const COMFORT = 'comfort';
+	case COMFORT = 'comfort';
 
-	public const SLEEP = 'sleep';
+	case SLEEP = 'sleep';
 
-	public const ANTI_FREEZE = 'anti_freeze';
-
-	public function getValue(): string
-	{
-		return strval(parent::getValue());
-	}
-
-	public function __toString(): string
-	{
-		return self::getValue();
-	}
+	case ANTI_FREEZE = 'anti_freeze';
 
 }

@@ -16,7 +16,7 @@ This addon has some services divided into namespaces. All services are preconfig
 container automatically.
 
 ```
-\FastyBird\Addon\ThermostatDevice
+\FastyBird\Addon\VirtualThermostat
   \Commands - Services used for user console interface
   \Drivers - Main thermostat services responsible for handling actions
   \Entities - All entities used by addon
@@ -40,7 +40,7 @@ Find fundamental details regarding the installation and configuration of this ad
 
 This addon is equipped with interactive console. With this console commands you could manage almost all addon features.
 
-* **fb:thermostat-device-addon:install**: is used for addon installation and configuration. With interactive menu you could manage addon and device.
+* **fb:virtual-thermostat-addon:install**: is used for addon installation and configuration. With interactive menu you could manage addon and device.
 
 Addon console command could be triggered like this :nerd_face:
 

@@ -1,21 +1,20 @@
 <?php declare(strict_types = 1);
 
-namespace FastyBird\Addon\ThermostatDevice\Tests\Cases\Unit\Drivers;
+namespace FastyBird\Addon\VirtualThermostat\Tests\Cases\Unit\Drivers;
 
 use Error;
-use FastyBird\Addon\ThermostatDevice\Exceptions;
-use FastyBird\Addon\ThermostatDevice\Tests;
-use FastyBird\Addon\ThermostatDevice\Types;
+use FastyBird\Addon\VirtualThermostat\Documents;
+use FastyBird\Addon\VirtualThermostat\Exceptions;
+use FastyBird\Addon\VirtualThermostat\Queries;
+use FastyBird\Addon\VirtualThermostat\Tests;
+use FastyBird\Addon\VirtualThermostat\Types;
 use FastyBird\Connector\Virtual\Drivers as VirtualDrivers;
-use FastyBird\Connector\Virtual\Entities as VirtualEntities;
 use FastyBird\Connector\Virtual\Queue as VirtualQueue;
-use FastyBird\Library\Bootstrap\Exceptions as BootstrapExceptions;
-use FastyBird\Library\Metadata\Documents as MetadataDocuments;
+use FastyBird\Library\Application\Exceptions as ApplicationExceptions;
 use FastyBird\Library\Metadata\Exceptions as MetadataExceptions;
+use FastyBird\Library\Metadata\Types as MetadataTypes;
+use FastyBird\Module\Devices\Documents as DevicesDocuments;
 use FastyBird\Module\Devices\Models as DevicesModels;
-use FastyBird\Module\Devices\Queries as DevicesQueries;
-use FastyBird\Module\Devices\States as DevicesStates;
-use FastyBird\Module\Devices\Utilities as DevicesUtilities;
 use Nette\DI;
 use React\EventLoop;
 use RuntimeException;
@@ -28,7 +27,7 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 {
 
 	/**
-	 * @throws BootstrapExceptions\InvalidArgument
+	 * @throws ApplicationExceptions\InvalidArgument
 	 * @throws DI\MissingServiceException
 	 * @throws Error
 	 * @throws Exceptions\InvalidArgument
@@ -40,11 +39,14 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 	{
 		$devicesRepository = $this->getContainer()->getByType(DevicesModels\Configuration\Devices\Repository::class);
 
-		$findDeviceQuery = new DevicesQueries\Configuration\FindDevices();
+		$findDeviceQuery = new Queries\Configuration\FindDevices();
 		$findDeviceQuery->byIdentifier('thermostat-office');
 
-		$device = $devicesRepository->findOneBy($findDeviceQuery);
-		self::assertInstanceOf(MetadataDocuments\DevicesModule\Device::class, $device);
+		$device = $devicesRepository->findOneBy(
+			$findDeviceQuery,
+			Documents\Devices\Device::class,
+		);
+		self::assertInstanceOf(Documents\Devices\Device::class, $device);
 
 		$driversManager = $this->getContainer()->getByType(VirtualDrivers\DriversManager::class);
 
@@ -61,7 +63,7 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 	 * @param array<string, int|float|bool|string> $readInitialStates
 	 * @param array<mixed> $expectedWriteEntities
 	 *
-	 * @throws BootstrapExceptions\InvalidArgument
+	 * @throws ApplicationExceptions\InvalidArgument
 	 * @throws DI\MissingServiceException
 	 * @throws Error
 	 * @throws Exceptions\InvalidArgument
@@ -72,19 +74,28 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 	 */
 	public function testProcess(array $readInitialStates, array $expectedWriteEntities): void
 	{
-		$channelPropertiesStatesManager = $this->createMock(DevicesUtilities\ChannelPropertiesStates::class);
+		$channelPropertiesStatesManager = $this->createMock(DevicesModels\States\ChannelPropertiesManager::class);
 		$channelPropertiesStatesManager
-			->method('readValue')
+			->method('read')
 			->willReturnCallback(
 				static function (
-					MetadataDocuments\DevicesModule\ChannelProperty $property,
-				) use ($readInitialStates): DevicesStates\ChannelProperty|null {
+					DevicesDocuments\Channels\Properties\Property $property,
+				) use ($readInitialStates): DevicesDocuments\States\Channels\Properties\Property|null {
 					if (array_key_exists($property->getId()->toString(), $readInitialStates)) {
-						$state = new Tests\Fixtures\Dummy\DummyChannelPropertyState($property->getId());
-						$state->setActualValue($readInitialStates[$property->getId()->toString()]);
-						$state->setValid(true);
-
-						return $state;
+						return new DevicesDocuments\States\Channels\Properties\Property(
+							$property->getId(),
+							$property->getChannel(),
+							new DevicesDocuments\States\StateValues(
+								$readInitialStates[$property->getId()->toString()],
+								null,
+							),
+							new DevicesDocuments\States\StateValues(
+								$readInitialStates[$property->getId()->toString()],
+								null,
+							),
+							false,
+							true,
+						);
 					}
 
 					return null;
@@ -92,7 +103,7 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 			);
 
 		$this->mockContainerService(
-			DevicesUtilities\ChannelPropertiesStates::class,
+			DevicesModels\States\ChannelPropertiesManager::class,
 			$channelPropertiesStatesManager,
 		);
 
@@ -102,7 +113,7 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 			->method('consume')
 			->with(
 				self::callback(
-					static function (VirtualEntities\Messages\Entity $entity) use ($expectedWriteEntities): bool {
+					static function (VirtualQueue\Messages\Message $entity) use ($expectedWriteEntities): bool {
 						self::assertTrue(in_array($entity->toArray(), $expectedWriteEntities, true));
 
 						return true;
@@ -117,11 +128,14 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 
 		$devicesRepository = $this->getContainer()->getByType(DevicesModels\Configuration\Devices\Repository::class);
 
-		$findDeviceQuery = new DevicesQueries\Configuration\FindDevices();
+		$findDeviceQuery = new Queries\Configuration\FindDevices();
 		$findDeviceQuery->byIdentifier('thermostat-office');
 
-		$device = $devicesRepository->findOneBy($findDeviceQuery);
-		self::assertInstanceOf(MetadataDocuments\DevicesModule\Device::class, $device);
+		$device = $devicesRepository->findOneBy(
+			$findDeviceQuery,
+			Documents\Devices\Device::class,
+		);
+		self::assertInstanceOf(Documents\Devices\Device::class, $device);
 
 		$driversManager = $this->getContainer()->getByType(VirtualDrivers\DriversManager::class);
 
@@ -133,7 +147,7 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 
 		$eventLoop = $this->getContainer()->getByType(EventLoop\LoopInterface::class);
 
-		$eventLoop->addTimer(1, static function () use ($eventLoop): void {
+		$eventLoop->addTimer(0.1, static function () use ($eventLoop): void {
 			$eventLoop->stop();
 		});
 
@@ -143,7 +157,7 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 
 		self::assertFalse($queue->isEmpty());
 
-		/** @phpstan-ignore-next-line */
+		// @phpstan-ignore-next-line
 		while (!$queue->isEmpty()) {
 			$consumers = $this->getContainer()->getByType(VirtualQueue\Consumers::class);
 
@@ -169,8 +183,8 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 					'1e196c5c-a469-4ec7-95e7-c4bb48d58fe0' => 17.0, // target_temperature - preset_away
 					'767ddcf6-24c5-48b0-baaa-e8c7a90d3dc0' => 20.0, // target_temperature - preset_eco
 					'15d157d1-0ec7-42a7-9683-51678de1ce9a' => 22.0, // target_temperature - preset_home
-					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT, // hvac_mode
-					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL, // preset_mode
+					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT->value, // hvac_mode
+					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL->value, // preset_mode
 				],
 				// Expected write entities
 				[
@@ -180,27 +194,39 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 						'channel' => '9808b386-9ed4-4e58-88f1-b39f5f70ef39',
 						'property' => 'bceca543-2de7-44b1-8a33-87e9574b6731',
 						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
 						'property' => 'hvac_state',
-						'value' => Types\HvacState::OFF,
+						'value' => Types\HvacState::OFF->value,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_room_temperature',
 						'value' => 22.3,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_floor_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_floor_temperature',
 						'value' => 24.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					],
+					[
+						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
+						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'floor_overheating',
+						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 				],
 			],
@@ -214,8 +240,8 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 					'1e196c5c-a469-4ec7-95e7-c4bb48d58fe0' => 17.0, // target_temperature - preset_away
 					'767ddcf6-24c5-48b0-baaa-e8c7a90d3dc0' => 20.0, // target_temperature - preset_eco
 					'15d157d1-0ec7-42a7-9683-51678de1ce9a' => 22.0, // target_temperature - preset_home
-					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT, // hvac_mode
-					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL, // preset_mode
+					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT->value, // hvac_mode
+					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL->value, // preset_mode
 				],
 				// Expected write entities
 				[
@@ -225,27 +251,39 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 						'channel' => '9808b386-9ed4-4e58-88f1-b39f5f70ef39',
 						'property' => 'bceca543-2de7-44b1-8a33-87e9574b6731',
 						'value' => true,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
 						'property' => 'hvac_state',
-						'value' => Types\HvacState::HEATING,
+						'value' => Types\HvacState::HEATING->value,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_room_temperature',
 						'value' => 21.7,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_floor_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_floor_temperature',
 						'value' => 22.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					],
+					[
+						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
+						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'floor_overheating',
+						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 				],
 			],
@@ -259,8 +297,8 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 					'1e196c5c-a469-4ec7-95e7-c4bb48d58fe0' => 17.0, // target_temperature - preset_away
 					'767ddcf6-24c5-48b0-baaa-e8c7a90d3dc0' => 20.0, // target_temperature - preset_eco
 					'15d157d1-0ec7-42a7-9683-51678de1ce9a' => 22.0, // target_temperature - preset_home
-					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT, // hvac_mode
-					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL, // preset_mode
+					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT->value, // hvac_mode
+					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL->value, // preset_mode
 				],
 				// Expected write entities
 				[
@@ -270,27 +308,39 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 						'channel' => '9808b386-9ed4-4e58-88f1-b39f5f70ef39',
 						'property' => 'bceca543-2de7-44b1-8a33-87e9574b6731',
 						'value' => true,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
 						'property' => 'hvac_state',
-						'value' => Types\HvacState::HEATING,
+						'value' => Types\HvacState::HEATING->value,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_room_temperature',
 						'value' => 21.6,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_floor_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_floor_temperature',
 						'value' => 22.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					],
+					[
+						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
+						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'floor_overheating',
+						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 				],
 			],
@@ -304,8 +354,8 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 					'1e196c5c-a469-4ec7-95e7-c4bb48d58fe0' => 17.0, // target_temperature - preset_away
 					'767ddcf6-24c5-48b0-baaa-e8c7a90d3dc0' => 20.0, // target_temperature - preset_eco
 					'15d157d1-0ec7-42a7-9683-51678de1ce9a' => 22.0, // target_temperature - preset_home
-					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT, // hvac_mode
-					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL, // preset_mode
+					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT->value, // hvac_mode
+					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL->value, // preset_mode
 				],
 				// Expected write entities
 				[
@@ -315,27 +365,39 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 						'channel' => '9808b386-9ed4-4e58-88f1-b39f5f70ef39',
 						'property' => 'bceca543-2de7-44b1-8a33-87e9574b6731',
 						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
 						'property' => 'hvac_state',
-						'value' => Types\HvacState::OFF,
+						'value' => Types\HvacState::OFF->value,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_room_temperature',
 						'value' => 22.3,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_floor_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_floor_temperature',
 						'value' => 22.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					],
+					[
+						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
+						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'floor_overheating',
+						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 				],
 			],
@@ -349,24 +411,34 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 					'1e196c5c-a469-4ec7-95e7-c4bb48d58fe0' => 17.0, // target_temperature - preset_away
 					'767ddcf6-24c5-48b0-baaa-e8c7a90d3dc0' => 20.0, // target_temperature - preset_eco
 					'15d157d1-0ec7-42a7-9683-51678de1ce9a' => 22.0, // target_temperature - preset_home
-					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT, // hvac_mode
-					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL, // preset_mode
+					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT->value, // hvac_mode
+					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL->value, // preset_mode
 				],
 				// Expected write entities
 				[
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_room_temperature',
 						'value' => 22.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_floor_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_floor_temperature',
 						'value' => 23.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					],
+					[
+						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
+						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'floor_overheating',
+						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 				],
 			],
@@ -380,24 +452,34 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 					'1e196c5c-a469-4ec7-95e7-c4bb48d58fe0' => 17.0, // target_temperature - preset_away
 					'767ddcf6-24c5-48b0-baaa-e8c7a90d3dc0' => 20.0, // target_temperature - preset_eco
 					'15d157d1-0ec7-42a7-9683-51678de1ce9a' => 22.0, // target_temperature - preset_home
-					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT, // hvac_mode
-					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL, // preset_mode
+					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT->value, // hvac_mode
+					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL->value, // preset_mode
 				],
 				// Expected write entities
 				[
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_room_temperature',
 						'value' => 22.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_floor_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_floor_temperature',
 						'value' => 23.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					],
+					[
+						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
+						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'floor_overheating',
+						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 				],
 			],
@@ -411,8 +493,8 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 					'1e196c5c-a469-4ec7-95e7-c4bb48d58fe0' => 17.0, // target_temperature - preset_away
 					'767ddcf6-24c5-48b0-baaa-e8c7a90d3dc0' => 20.0, // target_temperature - preset_eco
 					'15d157d1-0ec7-42a7-9683-51678de1ce9a' => 22.0, // target_temperature - preset_home
-					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT, // hvac_mode
-					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL, // preset_mode
+					'a326ba38-d188-4eac-a6ad-43bdcc84a730' => Types\HvacMode::HEAT->value, // hvac_mode
+					'f0b8100f-5ddb-4abd-8015-d0dbf9a11aa0' => Types\Preset::MANUAL->value, // preset_mode
 				],
 				// Expected write entities
 				[
@@ -422,27 +504,39 @@ final class ThermostatTest extends Tests\Cases\Unit\DbTestCase
 						'channel' => '9808b386-9ed4-4e58-88f1-b39f5f70ef39',
 						'property' => 'bceca543-2de7-44b1-8a33-87e9574b6731',
 						'value' => false,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
 						'property' => 'hvac_state',
-						'value' => Types\HvacState::OFF,
+						'value' => Types\HvacState::OFF->value,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_room_temperature',
 						'value' => 21.6,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 					[
 						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
 						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
-						'channel' => 'c2c572b3-3248-44da-aca0-fd329e1d9418',
-						'property' => 'actual_floor_temperature',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'current_floor_temperature',
 						'value' => 28.0,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					],
+					[
+						'connector' => '2b1ce81f-9933-4d52-afd4-bec3583e6a06',
+						'device' => '552cea8a-0e81-41d9-be2f-839b079f315e',
+						'channel' => 'b453987e-bbf4-46fc-830f-6448b19d9665',
+						'property' => 'floor_overheating',
+						'value' => true,
+						'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					],
 				],
 			],

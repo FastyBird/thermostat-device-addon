@@ -6,19 +6,19 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     common
  * @since          1.0.0
  *
  * @date           26.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice;
+namespace FastyBird\Addon\VirtualThermostat;
 
 /**
- * Connector constants
+ * Addon constants
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     common
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>

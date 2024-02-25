@@ -6,38 +6,38 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Commands
  * @since          1.0.0
  *
  * @date           23.10.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Commands;
+namespace FastyBird\Addon\VirtualThermostat\Commands;
 
 use Doctrine\DBAL;
-use Doctrine\Persistence;
 use Exception;
-use FastyBird\Addon\ThermostatDevice;
-use FastyBird\Addon\ThermostatDevice\Entities;
-use FastyBird\Addon\ThermostatDevice\Exceptions;
-use FastyBird\Addon\ThermostatDevice\Queries;
-use FastyBird\Addon\ThermostatDevice\Types;
+use FastyBird\Addon\VirtualThermostat;
+use FastyBird\Addon\VirtualThermostat\Entities;
+use FastyBird\Addon\VirtualThermostat\Exceptions;
+use FastyBird\Addon\VirtualThermostat\Queries;
+use FastyBird\Addon\VirtualThermostat\Types;
 use FastyBird\Connector\Virtual\Entities as VirtualEntities;
 use FastyBird\Connector\Virtual\Queries as VirtualQueries;
 use FastyBird\Connector\Virtual\Types as VirtualTypes;
-use FastyBird\Library\Bootstrap\Exceptions as BootstrapExceptions;
-use FastyBird\Library\Bootstrap\Helpers as BootstrapHelpers;
-use FastyBird\Library\Metadata\Documents as MetadataDocuments;
+use FastyBird\Library\Application\Exceptions as ApplicationExceptions;
+use FastyBird\Library\Application\Helpers as ApplicationHelpers;
 use FastyBird\Library\Metadata\Exceptions as MetadataExceptions;
+use FastyBird\Library\Metadata\Formats as MetadataFormats;
 use FastyBird\Library\Metadata\Types as MetadataTypes;
-use FastyBird\Library\Metadata\ValueObjects as MetadataValueObjects;
+use FastyBird\Library\Metadata\Utilities as MetadataUtilities;
+use FastyBird\Library\Tools\Exceptions as ToolsExceptions;
+use FastyBird\Module\Devices\Documents as DevicesDocuments;
 use FastyBird\Module\Devices\Entities as DevicesEntities;
 use FastyBird\Module\Devices\Exceptions as DevicesExceptions;
 use FastyBird\Module\Devices\Models as DevicesModels;
 use FastyBird\Module\Devices\Queries as DevicesQueries;
 use FastyBird\Module\Devices\States as DevicesStates;
-use FastyBird\Module\Devices\Utilities as DevicesUtilities;
 use IPub\DoctrineCrud\Exceptions as DoctrineCrudExceptions;
 use Nette\Localization;
 use Nette\Utils;
@@ -47,6 +47,8 @@ use Symfony\Component\Console\Input;
 use Symfony\Component\Console\Output;
 use Symfony\Component\Console\Style;
 use Throwable;
+use TypeError;
+use ValueError;
 use function array_filter;
 use function array_flip;
 use function array_key_exists;
@@ -71,7 +73,7 @@ use function usort;
 /**
  * Connector thermostat devices management command
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Commands
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
@@ -79,10 +81,10 @@ use function usort;
 class Install extends Console\Command\Command
 {
 
-	public const NAME = 'fb:thermostat-device-addon:devices:install';
+	public const NAME = 'fb:virtual-thermostat-addon:install';
 
 	public function __construct(
-		private readonly ThermostatDevice\Logger $logger,
+		private readonly VirtualThermostat\Logger $logger,
 		private readonly DevicesModels\Entities\Connectors\ConnectorsRepository $connectorsRepository,
 		private readonly DevicesModels\Entities\Devices\DevicesRepository $devicesRepository,
 		private readonly DevicesModels\Entities\Devices\DevicesManager $devicesManager,
@@ -93,10 +95,9 @@ class Install extends Console\Command\Command
 		private readonly DevicesModels\Entities\Channels\Properties\PropertiesRepository $channelsPropertiesRepository,
 		private readonly DevicesModels\Entities\Channels\Properties\PropertiesManager $channelsPropertiesManager,
 		private readonly DevicesModels\Configuration\Channels\Properties\Repository $channelsPropertiesConfigurationRepository,
-		private readonly DevicesUtilities\ChannelPropertiesStates $channelPropertiesStatesManager,
-		private readonly BootstrapHelpers\Database $databaseHelper,
+		private readonly DevicesModels\States\ChannelPropertiesManager $channelPropertiesStatesManager,
+		private readonly ApplicationHelpers\Database $databaseHelper,
 		private readonly Localization\Translator $translator,
-		private readonly Persistence\ManagerRegistry $managerRegistry,
 		string|null $name = null,
 	)
 	{
@@ -120,14 +121,17 @@ class Install extends Console\Command\Command
 	 * @throws DevicesExceptions\InvalidState
 	 * @throws Exception
 	 * @throws Exceptions\Runtime
+	 * @throws ToolsExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	protected function execute(Input\InputInterface $input, Output\OutputInterface $output): int
 	{
 		$io = new Style\SymfonyStyle($input, $output);
 
-		$io->title($this->translator->translate('//thermostat-device-addon.cmd.install.title'));
+		$io->title($this->translator->translate('//virtual-thermostat-addon.cmd.install.title'));
 
-		$io->note($this->translator->translate('//thermostat-device-addon.cmd.install.subtitle'));
+		$io->note($this->translator->translate('//virtual-thermostat-addon.cmd.install.subtitle'));
 
 		$this->askInstallAction($io);
 
@@ -141,20 +145,24 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\Runtime
 	 * @throws Exceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function createDevice(Style\SymfonyStyle $io): void
 	{
 		$connector = $this->askWhichConnector($io);
 
 		if ($connector === null) {
-			$io->warning($this->translator->translate('//thermostat-device-addon.cmd.base.messages.noConnectors'));
+			$io->warning(
+				$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.noConnectors'),
+			);
 
 			return;
 		}
 
 		$question = new Console\Question\Question(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.questions.provide.device.identifier',
+				'//virtual-thermostat-addon.cmd.install.questions.provide.device.identifier',
 			),
 		);
 
@@ -164,11 +172,11 @@ class Install extends Console\Command\Command
 				$findDeviceQuery->byIdentifier($answer);
 
 				if (
-					$this->devicesRepository->findOneBy($findDeviceQuery, Entities\ThermostatDevice::class) !== null
+					$this->devicesRepository->findOneBy($findDeviceQuery, Entities\Devices\Device::class) !== null
 				) {
 					throw new Exceptions\Runtime(
 						$this->translator->translate(
-							'//thermostat-device-addon.cmd.install.messages.identifier.device.used',
+							'//virtual-thermostat-addon.cmd.install.messages.identifier.device.used',
 						),
 					);
 				}
@@ -180,7 +188,7 @@ class Install extends Console\Command\Command
 		$identifier = $io->askQuestion($question);
 
 		if ($identifier === '' || $identifier === null) {
-			$identifierPattern = 'virtual-thermostat-device-%d';
+			$identifierPattern = 'virtual-thermostat-%d';
 
 			for ($i = 1; $i <= 100; $i++) {
 				$identifier = sprintf($identifierPattern, $i);
@@ -189,7 +197,7 @@ class Install extends Console\Command\Command
 				$findDeviceQuery->byIdentifier($identifier);
 
 				if (
-					$this->devicesRepository->findOneBy($findDeviceQuery, Entities\ThermostatDevice::class) === null
+					$this->devicesRepository->findOneBy($findDeviceQuery, Entities\Devices\Device::class) === null
 				) {
 					break;
 				}
@@ -199,7 +207,7 @@ class Install extends Console\Command\Command
 		if ($identifier === '') {
 			$io->error(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.identifier.device.missing',
+					'//virtual-thermostat-addon.cmd.install.messages.identifier.device.missing',
 				),
 			);
 
@@ -214,45 +222,64 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$device = $this->devicesManager->create(Utils\ArrayHash::from([
-				'entity' => Entities\ThermostatDevice::class,
+				'entity' => Entities\Devices\Device::class,
 				'connector' => $connector,
 				'identifier' => $identifier,
 				'name' => $name,
 			]));
-			assert($device instanceof Entities\ThermostatDevice);
+			assert($device instanceof Entities\Devices\Device);
 
 			$this->devicesPropertiesManager->create(Utils\ArrayHash::from([
 				'entity' => DevicesEntities\Devices\Properties\Variable::class,
-				'identifier' => VirtualTypes\DevicePropertyIdentifier::MODEL,
+				'identifier' => VirtualTypes\DevicePropertyIdentifier::MODEL->value,
 				'device' => $device,
-				'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_STRING),
-				'value' => Entities\ThermostatDevice::TYPE,
+				'dataType' => MetadataTypes\DataType::STRING,
+				'value' => Entities\Devices\Device::TYPE,
 			]));
+
+			$configurationChannel = $this->channelsManager->create(Utils\ArrayHash::from([
+				'entity' => Entities\Channels\Configuration::class,
+				'device' => $device,
+				'identifier' => Types\ChannelIdentifier::CONFIGURATION->value,
+			]));
+			assert($configurationChannel instanceof Entities\Channels\Configuration);
+
+			$stateChannel = $this->channelsManager->create(Utils\ArrayHash::from([
+				'entity' => Entities\Channels\State::class,
+				'device' => $device,
+				'identifier' => Types\ChannelIdentifier::STATE->value,
+			]));
+			assert($stateChannel instanceof Entities\Channels\State);
 
 			$modes = $this->askThermostatModes($io);
 
 			$unit = $this->askThermostatUnits($io);
 
-			$configurationChannel = $this->channelsManager->create(Utils\ArrayHash::from([
-				'entity' => Entities\Channels\Configuration::class,
-				'device' => $device,
-				'identifier' => Types\ChannelIdentifier::CONFIGURATION,
-			]));
-			assert($configurationChannel instanceof Entities\Channels\Configuration);
+			$this->createOrUpdateProperty(
+				DevicesEntities\Channels\Properties\Variable::class,
+				Utils\ArrayHash::from([
+					'entity' => DevicesEntities\Channels\Properties\Variable::class,
+					'identifier' => Types\ChannelPropertyIdentifier::UNIT->value,
+					'channel' => $configurationChannel,
+					'dataType' => MetadataTypes\DataType::ENUM,
+					'format' => [Types\Unit::CELSIUS->value, Types\Unit::FAHRENHEIT->value],
+					'value' => $unit->value,
+				]),
+			);
 
 			$hvacModeProperty = $this->createOrUpdateProperty(
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::HVAC_MODE,
-					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_ENUM),
+					'identifier' => Types\ChannelPropertyIdentifier::HVAC_MODE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::ENUM,
 					'format' => array_merge(
-						[Types\HvacMode::OFF],
-						$modes,
+						[Types\HvacMode::OFF->value],
+						array_map(static fn (Types\HvacMode $mode): string => $mode->value, $modes),
 					),
 					'unit' => null,
 					'invalid' => null,
@@ -260,6 +287,7 @@ class Install extends Console\Command\Command
 					'step' => null,
 					'settable' => true,
 					'queryable' => true,
+					'default' => Types\HvacMode::OFF->value,
 				]),
 			);
 
@@ -267,15 +295,15 @@ class Install extends Console\Command\Command
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::HVAC_STATE,
-					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_ENUM),
+					'identifier' => Types\ChannelPropertyIdentifier::HVAC_STATE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::ENUM,
 					'format' => array_merge(
-						[Types\HvacState::OFF, Types\HvacState::INACTIVE],
+						[Types\HvacState::OFF->value],
 						array_filter(
-							array_map(static fn (string $mode): string|null => match ($mode) {
-								Types\HvacMode::HEAT => Types\HvacState::HEATING,
-								Types\HvacMode::COOL => Types\HvacState::COOLING,
+							array_map(static fn (Types\HvacMode $mode): string|null => match ($mode) {
+								Types\HvacMode::HEAT => Types\HvacState::HEATING->value,
+								Types\HvacMode::COOL => Types\HvacState::COOLING->value,
 								default => null,
 							}, $modes),
 							static fn (string|null $state): bool => $state !== null,
@@ -287,41 +315,30 @@ class Install extends Console\Command\Command
 					'step' => null,
 					'settable' => false,
 					'queryable' => true,
+					'default' => Types\HvacState::OFF->value,
 				]),
 			);
 
-			$this->createOrUpdateProperty(
-				DevicesEntities\Channels\Properties\Variable::class,
-				Utils\ArrayHash::from([
-					'entity' => DevicesEntities\Channels\Properties\Variable::class,
-					'identifier' => Types\ChannelPropertyIdentifier::UNIT,
-					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_ENUM),
-					'format' => [Types\Unit::CELSIUS, Types\Unit::FAHRENHEIT],
-					'value' => $unit->getValue(),
-				]),
-			);
-
-			$heaters = $coolers = $openings = $sensors = $floorSensors = [];
+			$heaterActors = $coolerActors = $openingSensors = $roomTempSensors = $floorTempSensors = $roomHumSensors = [];
 
 			$actorsChannel = $this->channelsManager->create(Utils\ArrayHash::from([
 				'entity' => Entities\Channels\Actors::class,
 				'device' => $device,
-				'identifier' => Types\ChannelIdentifier::ACTORS,
+				'identifier' => Types\ChannelIdentifier::ACTORS->value,
 			]));
 			assert($actorsChannel instanceof Entities\Channels\Actors);
 
 			$sensorsChannel = $this->channelsManager->create(Utils\ArrayHash::from([
 				'entity' => Entities\Channels\Sensors::class,
 				'device' => $device,
-				'identifier' => Types\ChannelIdentifier::SENSORS,
+				'identifier' => Types\ChannelIdentifier::SENSORS->value,
 			]));
 			assert($sensorsChannel instanceof Entities\Channels\Sensors);
 
 			if (in_array(Types\HvacMode::HEAT, $modes, true)) {
 				$io->info(
 					$this->translator->translate(
-						'//thermostat-device-addon.cmd.install.messages.configureHeaters',
+						'//virtual-thermostat-addon.cmd.install.messages.configureHeaterActors',
 					),
 				);
 
@@ -329,17 +346,17 @@ class Install extends Console\Command\Command
 					$heater = $this->askActor(
 						$io,
 						array_map(
-							static fn (DevicesEntities\Channels\Properties\Dynamic $heater): string => $heater->getId()->toString(),
-							$heaters,
+							static fn (DevicesEntities\Channels\Properties\Dynamic $actor): string => $actor->getId()->toString(),
+							$heaterActors,
 						),
 						[
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SWITCH),
+							MetadataTypes\DataType::BOOLEAN,
+							MetadataTypes\DataType::SWITCH,
 						],
 					);
 
 					if ($heater !== false) {
-						$heaters[] = $heater;
+						$heaterActors[] = $heater;
 
 						$this->createOrUpdateProperty(
 							DevicesEntities\Channels\Properties\Mapped::class,
@@ -351,20 +368,20 @@ class Install extends Console\Command\Command
 									Types\ChannelPropertyIdentifier::HEATER_ACTOR,
 								),
 								'channel' => $actorsChannel,
-								'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
+								'dataType' => MetadataTypes\DataType::BOOLEAN,
 								'format' => null,
 								'unit' => null,
 								'invalid' => null,
 								'scale' => null,
 								'step' => null,
 								'settable' => true,
-								'queryable' => true,
+								'queryable' => $heater->isQueryable(),
 							]),
 						);
 
 						$question = new Console\Question\ConfirmationQuestion(
 							$this->translator->translate(
-								'//thermostat-device-addon.cmd.install.questions.addAnotherHeater',
+								'//virtual-thermostat-addon.cmd.install.questions.addAnotherHeater',
 							),
 							false,
 						);
@@ -379,7 +396,7 @@ class Install extends Console\Command\Command
 			if (in_array(Types\HvacMode::COOL, $modes, true)) {
 				$io->info(
 					$this->translator->translate(
-						'//thermostat-device-addon.cmd.install.messages.configureCoolers',
+						'//virtual-thermostat-addon.cmd.install.messages.configureCoolerActors',
 					),
 				);
 
@@ -387,17 +404,17 @@ class Install extends Console\Command\Command
 					$cooler = $this->askActor(
 						$io,
 						array_map(
-							static fn (DevicesEntities\Channels\Properties\Dynamic $cooler): string => $cooler->getId()->toString(),
-							$coolers,
+							static fn (DevicesEntities\Channels\Properties\Dynamic $actor): string => $actor->getId()->toString(),
+							$coolerActors,
 						),
 						[
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SWITCH),
+							MetadataTypes\DataType::BOOLEAN,
+							MetadataTypes\DataType::SWITCH,
 						],
 					);
 
 					if ($cooler !== false) {
-						$coolers[] = $cooler;
+						$coolerActors[] = $cooler;
 
 						$this->createOrUpdateProperty(
 							DevicesEntities\Channels\Properties\Mapped::class,
@@ -409,20 +426,20 @@ class Install extends Console\Command\Command
 									Types\ChannelPropertyIdentifier::COOLER_ACTOR,
 								),
 								'channel' => $actorsChannel,
-								'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
+								'dataType' => MetadataTypes\DataType::BOOLEAN,
 								'format' => null,
 								'unit' => null,
 								'invalid' => null,
 								'scale' => null,
 								'step' => null,
 								'settable' => true,
-								'queryable' => true,
+								'queryable' => $cooler->isQueryable(),
 							]),
 						);
 
 						$question = new Console\Question\ConfirmationQuestion(
 							$this->translator->translate(
-								'//thermostat-device-addon.cmd.install.questions.addAnotherCooler',
+								'//virtual-thermostat-addon.cmd.install.questions.addAnotherCooler',
 							),
 							false,
 						);
@@ -435,34 +452,29 @@ class Install extends Console\Command\Command
 			}
 
 			$question = new Console\Question\ConfirmationQuestion(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.questions.useOpenings'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.questions.useOpeningSensors',
+				),
 				false,
 			);
 
-			$useOpenings = (bool) $io->askQuestion($question);
+			$useOpeningSensors = (bool) $io->askQuestion($question);
 
-			if ($useOpenings) {
-				$openingsChannel = $this->channelsManager->create(Utils\ArrayHash::from([
-					'entity' => Entities\Channels\Sensors::class,
-					'device' => $device,
-					'identifier' => Types\ChannelIdentifier::OPENINGS,
-				]));
-				assert($openingsChannel instanceof Entities\Channels\Sensors);
-
+			if ($useOpeningSensors) {
 				do {
 					$opening = $this->askSensor(
 						$io,
 						array_map(
-							static fn (DevicesEntities\Channels\Properties\Dynamic $opening): string => $opening->getId()->toString(),
-							$openings,
+							static fn (DevicesEntities\Channels\Properties\Dynamic $sensor): string => $sensor->getId()->toString(),
+							$openingSensors,
 						),
 						[
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
+							MetadataTypes\DataType::BOOLEAN,
 						],
 					);
 
 					if ($opening !== false) {
-						$openings[] = $opening;
+						$openingSensors[] = $opening;
 
 						$this->createOrUpdateProperty(
 							DevicesEntities\Channels\Properties\Mapped::class,
@@ -470,24 +482,24 @@ class Install extends Console\Command\Command
 								'parent' => $opening,
 								'entity' => DevicesEntities\Channels\Properties\Mapped::class,
 								'identifier' => $this->findChannelPropertyIdentifier(
-									$openingsChannel,
+									$sensorsChannel,
 									Types\ChannelPropertyIdentifier::OPENING_SENSOR,
 								),
-								'channel' => $openingsChannel,
-								'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
+								'channel' => $sensorsChannel,
+								'dataType' => MetadataTypes\DataType::BOOLEAN,
 								'format' => null,
 								'unit' => null,
 								'invalid' => null,
 								'scale' => null,
 								'step' => null,
 								'settable' => false,
-								'queryable' => true,
+								'queryable' => $opening->isQueryable(),
 							]),
 						);
 
 						$question = new Console\Question\ConfirmationQuestion(
 							$this->translator->translate(
-								'//thermostat-device-addon.cmd.install.questions.addAnotherOpening',
+								'//virtual-thermostat-addon.cmd.install.questions.addAnotherOpeningSensor',
 							),
 							false,
 						);
@@ -501,7 +513,7 @@ class Install extends Console\Command\Command
 
 			$io->info(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.configureTemperatureSensor',
+					'//virtual-thermostat-addon.cmd.install.messages.configureRoomTemperatureSensor',
 				),
 			);
 
@@ -510,21 +522,21 @@ class Install extends Console\Command\Command
 					$io,
 					array_map(
 						static fn (DevicesEntities\Channels\Properties\Dynamic $sensor): string => $sensor->getId()->toString(),
-						$sensors,
+						$roomTempSensors,
 					),
 					[
-						MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_CHAR),
-						MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UCHAR),
-						MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SHORT),
-						MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_USHORT),
-						MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_INT),
-						MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UINT),
+						MetadataTypes\DataType::FLOAT,
+						MetadataTypes\DataType::CHAR,
+						MetadataTypes\DataType::UCHAR,
+						MetadataTypes\DataType::SHORT,
+						MetadataTypes\DataType::USHORT,
+						MetadataTypes\DataType::INT,
+						MetadataTypes\DataType::UINT,
 					],
 				);
 
 				if ($sensor !== false) {
-					$sensors[] = $sensor;
+					$roomTempSensors[] = $sensor;
 
 					$this->createOrUpdateProperty(
 						DevicesEntities\Channels\Properties\Mapped::class,
@@ -533,23 +545,23 @@ class Install extends Console\Command\Command
 							'entity' => DevicesEntities\Channels\Properties\Mapped::class,
 							'identifier' => $this->findChannelPropertyIdentifier(
 								$sensorsChannel,
-								Types\ChannelPropertyIdentifier::TARGET_SENSOR,
+								Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR,
 							),
 							'channel' => $sensorsChannel,
-							'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
+							'dataType' => MetadataTypes\DataType::FLOAT,
 							'format' => null,
 							'unit' => null,
 							'invalid' => null,
 							'scale' => null,
 							'step' => null,
 							'settable' => false,
-							'queryable' => true,
+							'queryable' => $sensor->isQueryable(),
 						]),
 					);
 
 					$question = new Console\Question\ConfirmationQuestion(
 						$this->translator->translate(
-							'//thermostat-device-addon.cmd.install.questions.addAnotherTemperatureSensor',
+							'//virtual-thermostat-addon.cmd.install.questions.addAnotherRoomTemperatureSensor',
 						),
 						false,
 					);
@@ -561,33 +573,35 @@ class Install extends Console\Command\Command
 			} while ($continue);
 
 			$question = new Console\Question\ConfirmationQuestion(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.questions.useFloorSensor'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.questions.useFloorTemperatureSensors',
+				),
 				false,
 			);
 
-			$useFloorSensor = (bool) $io->askQuestion($question);
+			$useFloorTempSensor = (bool) $io->askQuestion($question);
 
-			if ($useFloorSensor) {
+			if ($useFloorTempSensor) {
 				do {
 					$sensor = $this->askSensor(
 						$io,
 						array_map(
 							static fn (DevicesEntities\Channels\Properties\Dynamic $sensor): string => $sensor->getId()->toString(),
-							$floorSensors,
+							$floorTempSensors,
 						),
 						[
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_CHAR),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UCHAR),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SHORT),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_USHORT),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_INT),
-							MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UINT),
+							MetadataTypes\DataType::FLOAT,
+							MetadataTypes\DataType::CHAR,
+							MetadataTypes\DataType::UCHAR,
+							MetadataTypes\DataType::SHORT,
+							MetadataTypes\DataType::USHORT,
+							MetadataTypes\DataType::INT,
+							MetadataTypes\DataType::UINT,
 						],
 					);
 
 					if ($sensor !== false) {
-						$floorSensors[] = $sensor;
+						$floorTempSensors[] = $sensor;
 
 						$this->createOrUpdateProperty(
 							DevicesEntities\Channels\Properties\Mapped::class,
@@ -596,23 +610,23 @@ class Install extends Console\Command\Command
 								'entity' => DevicesEntities\Channels\Properties\Mapped::class,
 								'identifier' => $this->findChannelPropertyIdentifier(
 									$sensorsChannel,
-									Types\ChannelPropertyIdentifier::FLOOR_SENSOR,
+									Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR,
 								),
 								'channel' => $sensorsChannel,
-								'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
+								'dataType' => MetadataTypes\DataType::FLOAT,
 								'format' => null,
 								'unit' => null,
 								'invalid' => null,
 								'scale' => null,
 								'step' => null,
 								'settable' => false,
-								'queryable' => true,
+								'queryable' => $sensor->isQueryable(),
 							]),
 						);
 
 						$question = new Console\Question\ConfirmationQuestion(
 							$this->translator->translate(
-								'//thermostat-device-addon.cmd.install.questions.addAnotherFloorSensor',
+								'//virtual-thermostat-addon.cmd.install.questions.addAnotherFloorTemperatureSensor',
 							),
 							false,
 						);
@@ -624,41 +638,81 @@ class Install extends Console\Command\Command
 				} while ($continue);
 			}
 
-			$targetTemp = $this->askTargetTemperature(
-				$io,
-				Types\Preset::get(Types\Preset::MANUAL),
-				$unit,
+			$question = new Console\Question\ConfirmationQuestion(
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.questions.useRoomHumiditySensors',
+				),
+				false,
 			);
 
-			$targetTempProperty = $this->createOrUpdateProperty(
-				DevicesEntities\Channels\Properties\Dynamic::class,
-				Utils\ArrayHash::from([
-					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE,
-					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-					'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
-					'unit' => null,
-					'invalid' => null,
-					'scale' => null,
-					'step' => Entities\ThermostatDevice::PRECISION,
-					'settable' => true,
-					'queryable' => true,
-				]),
-			);
+			$useRoomHumSensor = (bool) $io->askQuestion($question);
+
+			if ($useRoomHumSensor) {
+				do {
+					$sensor = $this->askSensor(
+						$io,
+						array_map(
+							static fn (DevicesEntities\Channels\Properties\Dynamic $sensor): string => $sensor->getId()->toString(),
+							$roomHumSensors,
+						),
+						[
+							MetadataTypes\DataType::UCHAR,
+							MetadataTypes\DataType::USHORT,
+							MetadataTypes\DataType::UINT,
+							MetadataTypes\DataType::FLOAT,
+						],
+					);
+
+					if ($sensor !== false) {
+						$roomHumSensors[] = $sensor;
+
+						$this->createOrUpdateProperty(
+							DevicesEntities\Channels\Properties\Mapped::class,
+							Utils\ArrayHash::from([
+								'parent' => $sensor,
+								'entity' => DevicesEntities\Channels\Properties\Mapped::class,
+								'identifier' => $this->findChannelPropertyIdentifier(
+									$sensorsChannel,
+									Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR,
+								),
+								'channel' => $sensorsChannel,
+								'dataType' => MetadataTypes\DataType::UINT,
+								'format' => null,
+								'unit' => null,
+								'invalid' => null,
+								'scale' => null,
+								'step' => null,
+								'settable' => false,
+								'queryable' => $sensor->isQueryable(),
+							]),
+						);
+
+						$question = new Console\Question\ConfirmationQuestion(
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.install.questions.addAnotherRoomHumiditySensor',
+							),
+							false,
+						);
+
+						$continue = (bool) $io->askQuestion($question);
+					} else {
+						$continue = false;
+					}
+				} while ($continue);
+			}
 
 			$this->createOrUpdateProperty(
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::ACTUAL_TEMPERATURE,
-					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-					'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+					'identifier' => Types\ChannelPropertyIdentifier::CURRENT_ROOM_TEMPERATURE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::FLOAT,
+					'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
-					'step' => Entities\ThermostatDevice::PRECISION,
+					'step' => Entities\Devices\Device::PRECISION,
 					'settable' => false,
 					'queryable' => true,
 				]),
@@ -668,16 +722,16 @@ class Install extends Console\Command\Command
 				DevicesEntities\Channels\Properties\Variable::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Variable::class,
-					'identifier' => Types\ChannelPropertyIdentifier::LOW_TARGET_TEMPERATURE_TOLERANCE,
+					'identifier' => Types\ChannelPropertyIdentifier::LOW_TARGET_TEMPERATURE_TOLERANCE->value,
 					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
+					'dataType' => MetadataTypes\DataType::FLOAT,
 					'format' => null,
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
-					'step' => Entities\ThermostatDevice::PRECISION,
-					'default' => null,
-					'value' => Entities\ThermostatDevice::COLD_TOLERANCE,
+					'step' => Entities\Devices\Device::PRECISION,
+					'value' => Entities\Devices\Device::COLD_TOLERANCE,
+					'default' => Entities\Devices\Device::COLD_TOLERANCE,
 				]),
 			);
 
@@ -685,36 +739,55 @@ class Install extends Console\Command\Command
 				DevicesEntities\Channels\Properties\Variable::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Variable::class,
-					'identifier' => Types\ChannelPropertyIdentifier::HIGH_TARGET_TEMPERATURE_TOLERANCE,
+					'identifier' => Types\ChannelPropertyIdentifier::HIGH_TARGET_TEMPERATURE_TOLERANCE->value,
 					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
+					'dataType' => MetadataTypes\DataType::FLOAT,
 					'format' => null,
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
-					'step' => Entities\ThermostatDevice::PRECISION,
-					'default' => null,
-					'value' => Entities\ThermostatDevice::HOT_TOLERANCE,
+					'step' => Entities\Devices\Device::PRECISION,
+					'value' => Entities\Devices\Device::HOT_TOLERANCE,
+					'default' => Entities\Devices\Device::HOT_TOLERANCE,
 				]),
 			);
 
-			if ($useFloorSensor) {
+			if ($useOpeningSensors) {
+				$this->createOrUpdateProperty(
+					DevicesEntities\Channels\Properties\Dynamic::class,
+					Utils\ArrayHash::from([
+						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
+						'identifier' => Types\ChannelPropertyIdentifier::CURRENT_OPENINGS_STATE->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::ENUM,
+						'format' => [Types\OpeningStatePayload::OPENED->value, Types\OpeningStatePayload::CLOSED->value],
+						'unit' => null,
+						'invalid' => null,
+						'scale' => null,
+						'step' => null,
+						'settable' => false,
+						'queryable' => true,
+					]),
+				);
+			}
+
+			if ($useFloorTempSensor) {
 				$maxFloorTemp = $this->askMaxFloorTemperature($io, $unit);
 
 				$this->createOrUpdateProperty(
 					DevicesEntities\Channels\Properties\Variable::class,
 					Utils\ArrayHash::from([
 						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE,
+						'identifier' => Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE->value,
 						'channel' => $configurationChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [0, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+						'dataType' => MetadataTypes\DataType::FLOAT,
+						'format' => [0, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 						'unit' => null,
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
-						'default' => null,
+						'step' => Entities\Devices\Device::PRECISION,
 						'value' => $maxFloorTemp,
+						'default' => Entities\Devices\Device::MAXIMUM_FLOOR_TEMPERATURE,
 					]),
 				);
 
@@ -722,64 +795,52 @@ class Install extends Console\Command\Command
 					DevicesEntities\Channels\Properties\Dynamic::class,
 					Utils\ArrayHash::from([
 						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-						'identifier' => Types\ChannelPropertyIdentifier::ACTUAL_FLOOR_TEMPERATURE,
-						'channel' => $configurationChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [0, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+						'identifier' => Types\ChannelPropertyIdentifier::CURRENT_FLOOR_TEMPERATURE->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::FLOAT,
+						'format' => [0, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 						'unit' => null,
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
+						'step' => Entities\Devices\Device::PRECISION,
+						'settable' => false,
+						'queryable' => true,
+					]),
+				);
+
+				$this->createOrUpdateProperty(
+					DevicesEntities\Channels\Properties\Dynamic::class,
+					Utils\ArrayHash::from([
+						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
+						'identifier' => Types\ChannelPropertyIdentifier::FLOOR_OVERHEATING->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::BOOLEAN,
+						'format' => null,
+						'unit' => null,
+						'invalid' => null,
+						'scale' => null,
+						'step' => null,
 						'settable' => false,
 						'queryable' => true,
 					]),
 				);
 			}
 
-			if (in_array(Types\HvacMode::AUTO, $modes, true)) {
-				$heatingThresholdTemp = $this->askHeatingThresholdTemperature(
-					$io,
-					Types\Preset::get(Types\Preset::MANUAL),
-					$unit,
-				);
-
+			if ($useRoomHumSensor) {
 				$this->createOrUpdateProperty(
-					DevicesEntities\Channels\Properties\Variable::class,
+					DevicesEntities\Channels\Properties\Dynamic::class,
 					Utils\ArrayHash::from([
-						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE,
-						'channel' => $configurationChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
-						'unit' => null,
+						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
+						'identifier' => Types\ChannelPropertyIdentifier::CURRENT_ROOM_HUMIDITY->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::UCHAR,
+						'format' => [0, 100],
+						'unit' => '%',
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
-						'default' => null,
-						'value' => $heatingThresholdTemp,
-					]),
-				);
-
-				$coolingThresholdTemp = $this->askCoolingThresholdTemperature(
-					$io,
-					Types\Preset::get(Types\Preset::MANUAL),
-					$unit,
-				);
-
-				$this->createOrUpdateProperty(
-					DevicesEntities\Channels\Properties\Variable::class,
-					Utils\ArrayHash::from([
-						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE,
-						'channel' => $configurationChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
-						'unit' => null,
-						'invalid' => null,
-						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
-						'default' => null,
-						'value' => $coolingThresholdTemp,
+						'step' => 1,
+						'settable' => false,
+						'queryable' => true,
 					]),
 				);
 			}
@@ -790,56 +851,51 @@ class Install extends Console\Command\Command
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::PRESET_MODE,
-					'channel' => $configurationChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_ENUM),
-					'format' => array_merge(
-						[Types\Preset::MANUAL],
-						$presets,
-					),
+					'identifier' => Types\ChannelPropertyIdentifier::PRESET_MODE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::ENUM,
+					'format' => array_map(static fn (Types\Preset $preset): string => $preset->value, $presets),
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
 					'step' => null,
 					'settable' => false,
 					'queryable' => true,
+					'default' => Types\Preset::MANUAL->value,
 				]),
 			);
 
 			foreach ($presets as $preset) {
 				$io->info(
 					$this->translator->translate(
-						'//thermostat-device-addon.cmd.install.messages.preset.' . $preset,
+						'//virtual-thermostat-addon.cmd.install.messages.preset.' . $preset->value,
 					),
 				);
 
 				$presetChannel = $this->channelsManager->create(Utils\ArrayHash::from([
 					'entity' => Entities\Channels\Preset::class,
 					'device' => $device,
-					'identifier' => 'preset_' . $preset,
+					'identifier' => 'preset_' . $preset->value,
 				]));
 				assert($presetChannel instanceof Entities\Channels\Preset);
 
-				$setPresets[$preset] = [
-					'value' => $this->askTargetTemperature(
-						$io,
-						Types\Preset::get($preset),
-						$unit,
-					),
+				$setPresets[$preset->value] = [
+					'value' => $this->askTargetTemperature($io, $preset, $unit),
 					'property' => $this->createOrUpdateProperty(
 						DevicesEntities\Channels\Properties\Dynamic::class,
 						Utils\ArrayHash::from([
 							'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-							'identifier' => Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE,
+							'identifier' => Types\ChannelPropertyIdentifier::TARGET_ROOM_TEMPERATURE->value,
 							'channel' => $presetChannel,
-							'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-							'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+							'dataType' => MetadataTypes\DataType::FLOAT,
+							'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 							'unit' => null,
 							'invalid' => null,
 							'scale' => null,
-							'step' => Entities\ThermostatDevice::PRECISION,
+							'step' => Entities\Devices\Device::PRECISION,
 							'settable' => true,
 							'queryable' => true,
+							'default' => Entities\Devices\Device::TARGET_TEMPERATURE,
 						]),
 					),
 				];
@@ -847,7 +903,7 @@ class Install extends Console\Command\Command
 				if (in_array(Types\HvacMode::AUTO, $modes, true)) {
 					$heatingThresholdTemp = $this->askHeatingThresholdTemperature(
 						$io,
-						Types\Preset::get($preset),
+						$preset,
 						$unit,
 					);
 
@@ -855,14 +911,14 @@ class Install extends Console\Command\Command
 						DevicesEntities\Channels\Properties\Variable::class,
 						Utils\ArrayHash::from([
 							'entity' => DevicesEntities\Channels\Properties\Variable::class,
-							'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE,
+							'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE->value,
 							'channel' => $presetChannel,
-							'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-							'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+							'dataType' => MetadataTypes\DataType::FLOAT,
+							'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 							'unit' => null,
 							'invalid' => null,
 							'scale' => null,
-							'step' => Entities\ThermostatDevice::PRECISION,
+							'step' => Entities\Devices\Device::PRECISION,
 							'default' => null,
 							'value' => $heatingThresholdTemp,
 						]),
@@ -870,7 +926,7 @@ class Install extends Console\Command\Command
 
 					$coolingThresholdTemp = $this->askCoolingThresholdTemperature(
 						$io,
-						Types\Preset::get($preset),
+						$preset,
 						$unit,
 					);
 
@@ -878,14 +934,14 @@ class Install extends Console\Command\Command
 						DevicesEntities\Channels\Properties\Variable::class,
 						Utils\ArrayHash::from([
 							'entity' => DevicesEntities\Channels\Properties\Variable::class,
-							'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE,
+							'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE->value,
 							'channel' => $presetChannel,
-							'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-							'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+							'dataType' => MetadataTypes\DataType::FLOAT,
+							'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 							'unit' => null,
 							'invalid' => null,
 							'scale' => null,
-							'step' => Entities\ThermostatDevice::PRECISION,
+							'step' => Entities\Devices\Device::PRECISION,
 							'default' => null,
 							'value' => $coolingThresholdTemp,
 						]),
@@ -893,12 +949,11 @@ class Install extends Console\Command\Command
 				}
 			}
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.create.device.success',
+					'//virtual-thermostat-addon.cmd.install.messages.create.device.success',
 					['name' => $device->getName() ?? $device->getIdentifier()],
 				),
 			);
@@ -907,89 +962,67 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.create.device.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.create.device.error',
+				),
 			);
 
 			return;
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 
-		$hvacConfiguration = $this->channelsPropertiesConfigurationRepository->find(
+		$hvacModeState = $this->channelsPropertiesConfigurationRepository->find(
 			$hvacModeProperty->getId(),
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
-		assert($hvacConfiguration !== null);
+		assert($hvacModeState !== null);
 
-		$this->channelPropertiesStatesManager->setValue(
-			$hvacConfiguration,
+		$this->channelPropertiesStatesManager->set(
+			$hvacModeState,
 			Utils\ArrayHash::from([
-				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\HvacMode::OFF,
+				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\HvacMode::OFF->value,
 				DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-				DevicesStates\Property::VALID_FIELD => true,
-				DevicesStates\Property::PENDING_FIELD => false,
 			]),
+			MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
 		);
 
-		$targetTempConfiguration = $this->channelsPropertiesConfigurationRepository->find(
-			$targetTempProperty->getId(),
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
-		);
-		assert($targetTempConfiguration !== null);
-
-		$this->channelPropertiesStatesManager->setValue(
-			$targetTempConfiguration,
-			Utils\ArrayHash::from([
-				DevicesStates\Property::ACTUAL_VALUE_FIELD => $targetTemp,
-				DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-				DevicesStates\Property::VALID_FIELD => true,
-				DevicesStates\Property::PENDING_FIELD => false,
-			]),
-		);
-
-		$presetModeConfiguration = $this->channelsPropertiesConfigurationRepository->find(
+		$presetModeState = $this->channelsPropertiesConfigurationRepository->find(
 			$presetModeProperty->getId(),
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
-		assert($presetModeConfiguration !== null);
+		assert($presetModeState !== null);
 
-		$this->channelPropertiesStatesManager->setValue(
-			$presetModeConfiguration,
+		$this->channelPropertiesStatesManager->set(
+			$presetModeState,
 			Utils\ArrayHash::from([
-				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\Preset::MANUAL,
+				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\Preset::MANUAL->value,
 				DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-				DevicesStates\Property::VALID_FIELD => true,
-				DevicesStates\Property::PENDING_FIELD => false,
 			]),
+			MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
 		);
 
 		foreach ($setPresets as $data) {
 			$presetConfiguration = $this->channelsPropertiesConfigurationRepository->find(
 				$data['property']->getId(),
-				MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+				DevicesDocuments\Channels\Properties\Dynamic::class,
 			);
 			assert($presetConfiguration !== null);
 
-			$this->channelPropertiesStatesManager->setValue(
+			$this->channelPropertiesStatesManager->set(
 				$presetConfiguration,
 				Utils\ArrayHash::from([
 					DevicesStates\Property::ACTUAL_VALUE_FIELD => $data['value'],
 					DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-					DevicesStates\Property::VALID_FIELD => true,
-					DevicesStates\Property::PENDING_FIELD => false,
 				]),
+				MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
 			);
 		}
 	}
@@ -1001,16 +1034,20 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\Runtime
 	 * @throws Exceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function editDevice(Style\SymfonyStyle $io): void
 	{
 		$device = $this->askWhichDevice($io);
 
 		if ($device === null) {
-			$io->warning($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noDevices'));
+			$io->warning(
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noDevices'),
+			);
 
 			$question = new Console\Question\ConfirmationQuestion(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.questions.create.device'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.create.device'),
 				false,
 			);
 
@@ -1023,7 +1060,7 @@ class Install extends Console\Command\Command
 			return;
 		}
 
-		$findDevicePropertyQuery = new DevicesQueries\Entities\FindDeviceProperties();
+		$findDevicePropertyQuery = new VirtualQueries\Entities\FindDeviceProperties();
 		$findDevicePropertyQuery->forDevice($device);
 		$findDevicePropertyQuery->byIdentifier(VirtualTypes\DevicePropertyIdentifier::MODEL);
 
@@ -1033,75 +1070,89 @@ class Install extends Console\Command\Command
 		$findChannelQuery->forDevice($device);
 		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::CONFIGURATION);
 
-		$thermostatChannel = $this->channelsRepository->findOneBy(
+		$configurationChannel = $this->channelsRepository->findOneBy(
 			$findChannelQuery,
 			Entities\Channels\Configuration::class,
 		);
 
-		$hvacModeProperty = $unitProperty = $hvacStateProperty = $presetModeProperty = null;
-		$maxFloorTempProperty = $actualFloorTempProperty = $targetTempProperty = $actualTempProperty = null;
-		$heatingThresholdTempProperty = $coolingThresholdTempProperty = null;
+		$findChannelQuery = new Queries\Entities\FindStateChannels();
+		$findChannelQuery->forDevice($device);
+		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::STATE);
 
-		if ($thermostatChannel !== null) {
+		$stateChannel = $this->channelsRepository->findOneBy(
+			$findChannelQuery,
+			Entities\Channels\State::class,
+		);
+
+		$unitProperty = $maxFloorTempProperty = null;
+
+		if ($configurationChannel !== null) {
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HVAC_MODE);
-
-			$hvacModeProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
-
-			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::UNIT);
+			$findChannelPropertyQuery->forChannel($configurationChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::UNIT->value);
 
 			$unitProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HVAC_STATE);
+			$findChannelPropertyQuery->forChannel($configurationChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE->value);
+
+			$maxFloorTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+		}
+
+		$hvacModeProperty = $hvacStateProperty = $presetModeProperty = null;
+		$currentRoomTempProperty = $currentFloorTempProperty = $floorOverheatingProperty = null;
+		$currentRoomHumProperty = null;
+		$currentOpeningsStateProperty = null;
+
+		if ($stateChannel !== null) {
+			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::PRESET_MODE->value);
+
+			$presetModeProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+
+			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HVAC_MODE->value);
+
+			$hvacModeProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+
+			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HVAC_STATE->value);
 
 			$hvacStateProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE);
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::CURRENT_ROOM_TEMPERATURE->value);
 
-			$maxFloorTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
-
-			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::ACTUAL_FLOOR_TEMPERATURE);
-
-			$actualFloorTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+			$currentRoomTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE);
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::CURRENT_FLOOR_TEMPERATURE->value);
 
-			$targetTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
-
-			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::ACTUAL_TEMPERATURE);
-
-			$actualTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+			$currentFloorTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE);
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::FLOOR_OVERHEATING->value);
 
-			$heatingThresholdTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
-
-			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE);
-
-			$coolingThresholdTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+			$floorOverheatingProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
-			$findChannelPropertyQuery->forChannel($thermostatChannel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::PRESET_MODE);
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::CURRENT_ROOM_HUMIDITY->value);
 
-			$presetModeProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+			$currentRoomHumProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
+
+			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
+			$findChannelPropertyQuery->forChannel($stateChannel);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::CURRENT_OPENINGS_STATE->value);
+
+			$currentOpeningsStateProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 		}
 
 		$name = $this->askDeviceName($io, $device);
@@ -1116,35 +1167,10 @@ class Install extends Console\Command\Command
 			$unitProperty instanceof DevicesEntities\Channels\Properties\Variable ? $unitProperty : null,
 		);
 
-		$targetTemp = $this->askTargetTemperature(
-			$io,
-			Types\Preset::get(Types\Preset::MANUAL),
-			$unit,
-			$device,
-		);
-
 		$maxFloorTemp = null;
 
-		if ($device->hasFloorSensors()) {
+		if ($device->hasFloorTemperatureSensors()) {
 			$maxFloorTemp = $this->askMaxFloorTemperature($io, $unit, $device);
-		}
-
-		$heatingThresholdTemp = $coolingThresholdTemp = null;
-
-		if (in_array(Types\HvacMode::AUTO, $modes, true)) {
-			$heatingThresholdTemp = $this->askHeatingThresholdTemperature(
-				$io,
-				Types\Preset::get(Types\Preset::MANUAL),
-				$unit,
-				$device,
-			);
-
-			$coolingThresholdTemp = $this->askCoolingThresholdTemperature(
-				$io,
-				Types\Preset::get(Types\Preset::MANUAL),
-				$unit,
-				$device,
-			);
 		}
 
 		$presets = $this->askPresets(
@@ -1156,12 +1182,12 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$device = $this->devicesManager->update($device, Utils\ArrayHash::from([
 				'name' => $name,
 			]));
-			assert($device instanceof Entities\ThermostatDevice);
+			assert($device instanceof Entities\Devices\Device);
 
 			if (
 				$deviceModelProperty !== null
@@ -1175,43 +1201,52 @@ class Install extends Console\Command\Command
 			if ($deviceModelProperty === null) {
 				$this->devicesPropertiesManager->create(Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Devices\Properties\Variable::class,
-					'identifier' => VirtualTypes\DevicePropertyIdentifier::MODEL,
+					'identifier' => VirtualTypes\DevicePropertyIdentifier::MODEL->value,
 					'device' => $device,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_STRING),
-					'value' => Entities\ThermostatDevice::TYPE,
+					'dataType' => MetadataTypes\DataType::STRING,
+					'value' => Entities\Devices\Device::TYPE,
 				]));
 			} else {
 				$this->devicesPropertiesManager->update($deviceModelProperty, Utils\ArrayHash::from([
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_STRING),
+					'dataType' => MetadataTypes\DataType::STRING,
 					'format' => null,
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
 					'step' => null,
 					'default' => null,
-					'value' => Entities\ThermostatDevice::TYPE,
+					'value' => Entities\Devices\Device::TYPE,
 				]));
 			}
 
-			if ($thermostatChannel === null) {
-				$thermostatChannel = $this->channelsManager->create(Utils\ArrayHash::from([
+			if ($configurationChannel === null) {
+				$configurationChannel = $this->channelsManager->create(Utils\ArrayHash::from([
 					'entity' => Entities\Channels\Configuration::class,
 					'device' => $device,
-					'identifier' => Types\ChannelIdentifier::CONFIGURATION,
+					'identifier' => Types\ChannelIdentifier::CONFIGURATION->value,
 				]));
-				assert($thermostatChannel instanceof Entities\Channels\Configuration);
+				assert($configurationChannel instanceof Entities\Channels\Configuration);
+			}
+
+			if ($stateChannel === null) {
+				$stateChannel = $this->channelsManager->create(Utils\ArrayHash::from([
+					'entity' => Entities\Channels\State::class,
+					'device' => $device,
+					'identifier' => Types\ChannelIdentifier::STATE->value,
+				]));
+				assert($stateChannel instanceof Entities\Channels\Configuration);
 			}
 
 			$hvacModeProperty = $this->createOrUpdateProperty(
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::HVAC_MODE,
-					'channel' => $thermostatChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_ENUM),
+					'identifier' => Types\ChannelPropertyIdentifier::HVAC_MODE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::ENUM,
 					'format' => array_merge(
-						[Types\HvacMode::OFF],
-						$modes,
+						[Types\HvacMode::OFF->value],
+						array_map(static fn (Types\HvacMode $mode): string => $mode->value, $modes),
 					),
 					'unit' => null,
 					'invalid' => null,
@@ -1219,6 +1254,7 @@ class Install extends Console\Command\Command
 					'step' => null,
 					'settable' => true,
 					'queryable' => true,
+					'default' => Types\HvacMode::OFF->value,
 				]),
 				$hvacModeProperty,
 			);
@@ -1227,15 +1263,15 @@ class Install extends Console\Command\Command
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::HVAC_STATE,
-					'channel' => $thermostatChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_ENUM),
+					'identifier' => Types\ChannelPropertyIdentifier::HVAC_STATE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::ENUM,
 					'format' => array_merge(
-						[Types\HvacState::OFF, Types\HvacState::INACTIVE],
+						[Types\HvacState::OFF->value],
 						array_filter(
-							array_map(static fn (string $mode): string|null => match ($mode) {
-								Types\HvacMode::HEAT => Types\HvacState::HEATING,
-								Types\HvacMode::COOL => Types\HvacState::COOLING,
+							array_map(static fn (Types\HvacMode $mode): string|null => match ($mode) {
+								Types\HvacMode::HEAT => Types\HvacState::HEATING->value,
+								Types\HvacMode::COOL => Types\HvacState::COOLING->value,
 								default => null,
 							}, $modes),
 							static fn (string|null $state): bool => $state !== null,
@@ -1247,61 +1283,68 @@ class Install extends Console\Command\Command
 					'step' => null,
 					'settable' => false,
 					'queryable' => true,
+					'default' => Types\HvacState::OFF->value,
 				]),
 				$hvacStateProperty,
-			);
-
-			$targetTempProperty = $this->createOrUpdateProperty(
-				DevicesEntities\Channels\Properties\Dynamic::class,
-				Utils\ArrayHash::from([
-					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE,
-					'channel' => $thermostatChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-					'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
-					'unit' => null,
-					'invalid' => null,
-					'scale' => null,
-					'step' => Entities\ThermostatDevice::PRECISION,
-					'settable' => true,
-					'queryable' => true,
-				]),
-				$targetTempProperty,
 			);
 
 			$this->createOrUpdateProperty(
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::ACTUAL_TEMPERATURE,
-					'channel' => $thermostatChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-					'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+					'identifier' => Types\ChannelPropertyIdentifier::CURRENT_ROOM_TEMPERATURE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::FLOAT,
+					'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
-					'step' => Entities\ThermostatDevice::PRECISION,
+					'step' => Entities\Devices\Device::PRECISION,
 					'settable' => false,
 					'queryable' => true,
 				]),
-				$actualTempProperty,
+				$currentRoomTempProperty,
 			);
 
-			if ($device->hasFloorSensors()) {
+			if ($device->hasOpeningsSensors()) {
+				$this->createOrUpdateProperty(
+					DevicesEntities\Channels\Properties\Dynamic::class,
+					Utils\ArrayHash::from([
+						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
+						'identifier' => Types\ChannelPropertyIdentifier::CURRENT_OPENINGS_STATE->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::ENUM,
+						'format' => [Types\OpeningStatePayload::OPENED->value, Types\OpeningStatePayload::CLOSED->value],
+						'unit' => null,
+						'invalid' => null,
+						'scale' => null,
+						'step' => null,
+						'settable' => false,
+						'queryable' => true,
+					]),
+					$currentOpeningsStateProperty,
+				);
+			} else {
+				if ($currentOpeningsStateProperty !== null) {
+					$this->channelsPropertiesManager->delete($currentOpeningsStateProperty);
+				}
+			}
+
+			if ($device->hasFloorTemperatureSensors()) {
 				$this->createOrUpdateProperty(
 					DevicesEntities\Channels\Properties\Variable::class,
 					Utils\ArrayHash::from([
 						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE,
-						'channel' => $thermostatChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [0, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+						'identifier' => Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE->value,
+						'channel' => $configurationChannel,
+						'dataType' => MetadataTypes\DataType::FLOAT,
+						'format' => [0, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 						'unit' => null,
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
-						'default' => null,
+						'step' => Entities\Devices\Device::PRECISION,
 						'value' => $maxFloorTemp,
+						'default' => Entities\Devices\Device::MAXIMUM_FLOOR_TEMPERATURE,
 					]),
 					$maxFloorTempProperty,
 				);
@@ -1310,72 +1353,72 @@ class Install extends Console\Command\Command
 					DevicesEntities\Channels\Properties\Dynamic::class,
 					Utils\ArrayHash::from([
 						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-						'identifier' => Types\ChannelPropertyIdentifier::ACTUAL_FLOOR_TEMPERATURE,
-						'channel' => $thermostatChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [0, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+						'identifier' => Types\ChannelPropertyIdentifier::CURRENT_FLOOR_TEMPERATURE->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::FLOAT,
+						'format' => [0, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 						'unit' => null,
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
+						'step' => Entities\Devices\Device::PRECISION,
 						'settable' => false,
 						'queryable' => true,
 					]),
-					$actualFloorTempProperty,
+					$currentFloorTempProperty,
+				);
+
+				$this->createOrUpdateProperty(
+					DevicesEntities\Channels\Properties\Dynamic::class,
+					Utils\ArrayHash::from([
+						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
+						'identifier' => Types\ChannelPropertyIdentifier::FLOOR_OVERHEATING->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::BOOLEAN,
+						'format' => null,
+						'unit' => null,
+						'invalid' => null,
+						'scale' => null,
+						'step' => null,
+						'settable' => false,
+						'queryable' => true,
+					]),
+					$floorOverheatingProperty,
 				);
 			} else {
 				if ($maxFloorTempProperty !== null) {
 					$this->channelsPropertiesManager->delete($maxFloorTempProperty);
 				}
 
-				if ($actualFloorTempProperty !== null) {
-					$this->channelsPropertiesManager->delete($actualFloorTempProperty);
+				if ($currentFloorTempProperty !== null) {
+					$this->channelsPropertiesManager->delete($currentFloorTempProperty);
+				}
+
+				if ($floorOverheatingProperty !== null) {
+					$this->channelsPropertiesManager->delete($floorOverheatingProperty);
 				}
 			}
 
-			if (in_array(Types\HvacMode::AUTO, $modes, true)) {
+			if ($device->hasRoomHumiditySensors()) {
 				$this->createOrUpdateProperty(
-					DevicesEntities\Channels\Properties\Variable::class,
+					DevicesEntities\Channels\Properties\Dynamic::class,
 					Utils\ArrayHash::from([
-						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE,
-						'channel' => $thermostatChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
-						'unit' => null,
+						'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
+						'identifier' => Types\ChannelPropertyIdentifier::CURRENT_ROOM_HUMIDITY->value,
+						'channel' => $stateChannel,
+						'dataType' => MetadataTypes\DataType::UCHAR,
+						'format' => [0, 100],
+						'unit' => '%',
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
-						'default' => null,
-						'value' => $heatingThresholdTemp,
+						'step' => 1,
+						'settable' => false,
+						'queryable' => true,
 					]),
-					$heatingThresholdTempProperty,
-				);
-
-				$this->createOrUpdateProperty(
-					DevicesEntities\Channels\Properties\Variable::class,
-					Utils\ArrayHash::from([
-						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE,
-						'channel' => $thermostatChannel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
-						'unit' => null,
-						'invalid' => null,
-						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
-						'default' => null,
-						'value' => $coolingThresholdTemp,
-					]),
-					$coolingThresholdTempProperty,
+					$currentRoomHumProperty,
 				);
 			} else {
-				if ($heatingThresholdTempProperty !== null) {
-					$this->channelsPropertiesManager->delete($heatingThresholdTempProperty);
-				}
-
-				if ($coolingThresholdTempProperty !== null) {
-					$this->channelsPropertiesManager->delete($coolingThresholdTempProperty);
+				if ($currentRoomHumProperty !== null) {
+					$this->channelsPropertiesManager->delete($currentRoomHumProperty);
 				}
 			}
 
@@ -1383,31 +1426,25 @@ class Install extends Console\Command\Command
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::PRESET_MODE,
-					'channel' => $thermostatChannel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_ENUM),
-					'format' => array_merge(
-						[Types\Preset::MANUAL],
-						$presets,
-					),
+					'identifier' => Types\ChannelPropertyIdentifier::PRESET_MODE->value,
+					'channel' => $stateChannel,
+					'dataType' => MetadataTypes\DataType::ENUM,
+					'format' => array_map(static fn (Types\Preset $preset): string => $preset->value, $presets),
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
 					'step' => null,
 					'settable' => false,
 					'queryable' => true,
+					'default' => Types\Preset::MANUAL->value,
 				]),
 				$presetModeProperty,
 			);
 
-			foreach (Types\Preset::getAvailableValues() as $preset) {
-				if ($preset === Types\Preset::MANUAL) {
-					continue;
-				}
-
+			foreach (Types\Preset::cases() as $preset) {
 				$findPresetChannelQuery = new Queries\Entities\FindPresetChannels();
 				$findPresetChannelQuery->forDevice($device);
-				$findPresetChannelQuery->byIdentifier('preset_' . $preset);
+				$findPresetChannelQuery->byIdentifier(Types\ChannelIdentifier::from('preset_' . $preset->value));
 
 				$presetChannel = $this->channelsRepository->findOneBy(
 					$findPresetChannelQuery,
@@ -1419,30 +1456,31 @@ class Install extends Console\Command\Command
 						$presetChannel = $this->channelsManager->create(Utils\ArrayHash::from([
 							'entity' => Entities\Channels\Preset::class,
 							'device' => $device,
-							'identifier' => 'preset_' . $preset,
+							'identifier' => 'preset_' . $preset->value,
 						]));
 						assert($presetChannel instanceof Entities\Channels\Preset);
 
-						$setPresets[$preset] = [
+						$setPresets[$preset->value] = [
 							'value' => $this->askTargetTemperature(
 								$io,
-								Types\Preset::get($preset),
+								$preset,
 								$unit,
 							),
 							'property' => $this->createOrUpdateProperty(
 								DevicesEntities\Channels\Properties\Dynamic::class,
 								Utils\ArrayHash::from([
 									'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-									'identifier' => Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE,
+									'identifier' => Types\ChannelPropertyIdentifier::TARGET_ROOM_TEMPERATURE->value,
 									'channel' => $presetChannel,
-									'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-									'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+									'dataType' => MetadataTypes\DataType::FLOAT,
+									'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 									'unit' => null,
 									'invalid' => null,
 									'scale' => null,
-									'step' => Entities\ThermostatDevice::PRECISION,
+									'step' => Entities\Devices\Device::PRECISION,
 									'settable' => true,
 									'queryable' => true,
+									'default' => Entities\Devices\Device::TARGET_TEMPERATURE,
 								]),
 							),
 						];
@@ -1450,7 +1488,7 @@ class Install extends Console\Command\Command
 						if (in_array(Types\HvacMode::AUTO, $modes, true)) {
 							$heatingThresholdTemp = $this->askHeatingThresholdTemperature(
 								$io,
-								Types\Preset::get($preset),
+								$preset,
 								$unit,
 							);
 
@@ -1458,14 +1496,14 @@ class Install extends Console\Command\Command
 								DevicesEntities\Channels\Properties\Variable::class,
 								Utils\ArrayHash::from([
 									'entity' => DevicesEntities\Channels\Properties\Variable::class,
-									'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE,
+									'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE->value,
 									'channel' => $presetChannel,
-									'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-									'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+									'dataType' => MetadataTypes\DataType::FLOAT,
+									'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 									'unit' => null,
 									'invalid' => null,
 									'scale' => null,
-									'step' => Entities\ThermostatDevice::PRECISION,
+									'step' => Entities\Devices\Device::PRECISION,
 									'default' => null,
 									'value' => $heatingThresholdTemp,
 								]),
@@ -1473,7 +1511,7 @@ class Install extends Console\Command\Command
 
 							$coolingThresholdTemp = $this->askCoolingThresholdTemperature(
 								$io,
-								Types\Preset::get($preset),
+								$preset,
 								$unit,
 							);
 
@@ -1481,14 +1519,14 @@ class Install extends Console\Command\Command
 								DevicesEntities\Channels\Properties\Variable::class,
 								Utils\ArrayHash::from([
 									'entity' => DevicesEntities\Channels\Properties\Variable::class,
-									'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE,
+									'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE->value,
 									'channel' => $presetChannel,
-									'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-									'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+									'dataType' => MetadataTypes\DataType::FLOAT,
+									'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 									'unit' => null,
 									'invalid' => null,
 									'scale' => null,
-									'step' => Entities\ThermostatDevice::PRECISION,
+									'step' => Entities\Devices\Device::PRECISION,
 									'default' => null,
 									'value' => $coolingThresholdTemp,
 								]),
@@ -1502,12 +1540,11 @@ class Install extends Console\Command\Command
 				}
 			}
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.update.device.success',
+					'//virtual-thermostat-addon.cmd.install.messages.update.device.success',
 					['name' => $device->getName() ?? $device->getIdentifier()],
 				),
 			);
@@ -1516,122 +1553,96 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.update.device.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.update.device.error',
+				),
 			);
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 
 		assert($hvacModeProperty instanceof DevicesEntities\Channels\Properties\Dynamic);
 
-		$hvacModeConfiguration = $this->channelsPropertiesConfigurationRepository->find(
+		$hvacModeState = $this->channelsPropertiesConfigurationRepository->find(
 			$hvacModeProperty->getId(),
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
-		assert($hvacModeConfiguration !== null);
+		assert($hvacModeState !== null);
 
-		$this->channelPropertiesStatesManager->setValue(
-			$hvacModeConfiguration,
+		$this->channelPropertiesStatesManager->set(
+			$hvacModeState,
 			Utils\ArrayHash::from([
-				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\HvacMode::OFF,
+				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\HvacMode::OFF->value,
 				DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-				DevicesStates\Property::VALID_FIELD => true,
-				DevicesStates\Property::PENDING_FIELD => false,
 			]),
-		);
-
-		assert($targetTempProperty instanceof DevicesEntities\Channels\Properties\Dynamic);
-
-		$targetTempConfiguration = $this->channelsPropertiesConfigurationRepository->find(
-			$targetTempProperty->getId(),
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
-		);
-		assert($targetTempConfiguration !== null);
-
-		$this->channelPropertiesStatesManager->setValue(
-			$targetTempConfiguration,
-			Utils\ArrayHash::from([
-				DevicesStates\Property::ACTUAL_VALUE_FIELD => $targetTemp,
-				DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-				DevicesStates\Property::VALID_FIELD => true,
-				DevicesStates\Property::PENDING_FIELD => false,
-			]),
+			MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
 		);
 
 		assert($presetModeProperty instanceof DevicesEntities\Channels\Properties\Dynamic);
 
-		$presetModeConfiguration = $this->channelsPropertiesConfigurationRepository->find(
+		$presetModeState = $this->channelsPropertiesConfigurationRepository->find(
 			$presetModeProperty->getId(),
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
-		assert($presetModeConfiguration !== null);
+		assert($presetModeState !== null);
 
-		$this->channelPropertiesStatesManager->setValue(
-			$presetModeConfiguration,
+		$this->channelPropertiesStatesManager->set(
+			$presetModeState,
 			Utils\ArrayHash::from([
-				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\Preset::MANUAL,
+				DevicesStates\Property::ACTUAL_VALUE_FIELD => Types\Preset::MANUAL->value,
 				DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-				DevicesStates\Property::VALID_FIELD => true,
-				DevicesStates\Property::PENDING_FIELD => false,
 			]),
+			MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
 		);
 
 		foreach ($setPresets as $data) {
 			$presetConfiguration = $this->channelsPropertiesConfigurationRepository->find(
 				$data['property']->getId(),
-				MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+				DevicesDocuments\Channels\Properties\Dynamic::class,
 			);
 			assert($presetConfiguration !== null);
 
-			$this->channelPropertiesStatesManager->setValue(
+			$this->channelPropertiesStatesManager->set(
 				$presetConfiguration,
 				Utils\ArrayHash::from([
 					DevicesStates\Property::ACTUAL_VALUE_FIELD => $data['value'],
 					DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-					DevicesStates\Property::VALID_FIELD => true,
-					DevicesStates\Property::PENDING_FIELD => false,
 				]),
+				MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
 			);
 		}
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
-	 * @throws DBAL\Exception
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidState
-	 * @throws Exceptions\Runtime
 	 */
 	private function deleteDevice(Style\SymfonyStyle $io): void
 	{
 		$device = $this->askWhichDevice($io);
 
 		if ($device === null) {
-			$io->info($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noDevices'));
+			$io->info($this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noDevices'));
 
 			return;
 		}
 
 		$io->warning(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.messages.remove.device.confirm',
+				'//virtual-thermostat-addon.cmd.install.messages.remove.device.confirm',
 				['name' => $device->getName() ?? $device->getIdentifier()],
 			),
 		);
 
 		$question = new Console\Question\ConfirmationQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.questions.continue'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.questions.continue'),
 			false,
 		);
 
@@ -1643,16 +1654,15 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$this->devicesManager->delete($device);
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.remove.device.success',
+					'//virtual-thermostat-addon.cmd.install.messages.remove.device.success',
 					['name' => $device->getName() ?? $device->getIdentifier()],
 				),
 			);
@@ -1661,27 +1671,24 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
 					'type' => 'initialize-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.remove.device.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.remove.device.error',
+				),
 			);
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws Console\Exception\ExceptionInterface
 	 * @throws DBAL\Exception
 	 * @throws DevicesExceptions\InvalidState
@@ -1691,13 +1698,16 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\Runtime
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws ToolsExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function manageDevice(Style\SymfonyStyle $io): void
 	{
 		$device = $this->askWhichDevice($io);
 
 		if ($device === null) {
-			$io->info($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noDevices'));
+			$io->info($this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noDevices'));
 
 			return;
 		}
@@ -1707,16 +1717,19 @@ class Install extends Console\Command\Command
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function listDevices(Style\SymfonyStyle $io): void
 	{
 		$findDevicesQuery = new Queries\Entities\FindDevices();
 
-		$devices = $this->devicesRepository->findAllBy($findDevicesQuery, Entities\ThermostatDevice::class);
+		$devices = $this->devicesRepository->findAllBy($findDevicesQuery, Entities\Devices\Device::class);
 		usort(
 			$devices,
-			static fn (Entities\ThermostatDevice $a, Entities\ThermostatDevice $b): int => (
+			static fn (Entities\Devices\Device $a, Entities\Devices\Device $b): int => (
 				($a->getName() ?? $a->getIdentifier()) <=> ($b->getName() ?? $b->getIdentifier())
 			),
 		);
@@ -1724,10 +1737,10 @@ class Install extends Console\Command\Command
 		$table = new Console\Helper\Table($io);
 		$table->setHeaders([
 			'#',
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.name'),
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.hvacModes'),
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.presets'),
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.connector'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.name'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.hvacModes'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.presets'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.connector'),
 		]);
 
 		foreach ($devices as $index => $device) {
@@ -1735,29 +1748,23 @@ class Install extends Console\Command\Command
 				$index + 1,
 				$device->getName() ?? $device->getIdentifier(),
 				implode(', ', array_filter(
-					array_map(function (string $item): string|null {
+					array_map(function (Types\HvacMode $item): string|null {
 						if ($item === Types\HvacMode::OFF) {
 							return null;
 						}
 
 						return $this->translator->translate(
-							'//thermostat-device-addon.cmd.install.answers.mode.' . $item,
+							'//virtual-thermostat-addon.cmd.install.answers.mode.' . $item->value,
 						);
 					}, $device->getHvacModes()),
 					static fn (string|null $item): bool => $item !== null,
 				)),
-				implode(', ', array_filter(
-					array_map(function (string $item): string|null {
-						if ($item === Types\Preset::MANUAL) {
-							return null;
-						}
-
-						return $this->translator->translate(
-							'//thermostat-device-addon.cmd.install.answers.preset.' . $item,
-						);
-					}, $device->getPresetModes()),
-					static fn (string|null $item): bool => $item !== null,
-				)),
+				implode(
+					', ',
+					array_map(fn (Types\Preset $item): string => $this->translator->translate(
+						'//virtual-thermostat-addon.cmd.install.answers.preset.' . $item->value,
+					), $device->getPresetModes()),
+				),
 				$device->getConnector()->getName() ?? $device->getConnector()->getIdentifier(),
 			]);
 		}
@@ -1768,13 +1775,15 @@ class Install extends Console\Command\Command
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DBAL\Exception
 	 * @throws DevicesExceptions\InvalidState
 	 * @throws Exceptions\Runtime
 	 * @throws Exception
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	private function createActor(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function createActor(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$findChannelQuery = new Queries\Entities\FindActorChannels();
 		$findChannelQuery->forDevice($device);
@@ -1790,7 +1799,7 @@ class Install extends Console\Command\Command
 		$heater = $this->askActor(
 			$io,
 			array_map(
-				static fn (DevicesEntities\Channels\Properties\Dynamic $heater): string => $heater->getId()->toString(),
+				static fn (DevicesEntities\Channels\Properties\Dynamic $actor): string => $actor->getId()->toString(),
 				array_filter(
 					$device->getActors(),
 					// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
@@ -1798,8 +1807,8 @@ class Install extends Console\Command\Command
 				),
 			),
 			[
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SWITCH),
+				MetadataTypes\DataType::BOOLEAN,
+				MetadataTypes\DataType::SWITCH,
 			],
 		);
 
@@ -1809,34 +1818,33 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$property = $this->channelsPropertiesManager->create(Utils\ArrayHash::from([
 				'parent' => $heater,
 				'entity' => DevicesEntities\Channels\Properties\Mapped::class,
 				'identifier' => $this->findChannelPropertyIdentifier(
 					$actorsChannel,
-					$actorType->getValue(),
+					$actorType,
 				),
 				'name' => $name,
 				'channel' => $actorsChannel,
-				'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
+				'dataType' => MetadataTypes\DataType::BOOLEAN,
 				'format' => null,
 				'unit' => null,
 				'invalid' => null,
 				'scale' => null,
 				'step' => null,
 				'settable' => true,
-				'queryable' => true,
+				'queryable' => $heater->isQueryable(),
 			]));
 			assert($property instanceof DevicesEntities\Channels\Properties\Mapped);
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.create.actor.success',
+					'//virtual-thermostat-addon.cmd.install.messages.create.actor.success',
 					['name' => $property->getName() ?? $property->getIdentifier()],
 				),
 			);
@@ -1845,23 +1853,20 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.create.actor.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.create.actor.error',
+				),
 			);
 
 			return;
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 	}
@@ -1869,16 +1874,20 @@ class Install extends Console\Command\Command
 	/**
 	 * @throws DevicesExceptions\InvalidState
 	 * @throws Exception
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	private function editActor(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function editActor(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$property = $this->askWhichActor($io, $device);
 
 		if ($property === null) {
-			$io->warning($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noActors'));
+			$io->warning(
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noActors'),
+			);
 
 			$question = new Console\Question\ConfirmationQuestion(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.questions.create.actor'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.create.actor'),
 				false,
 			);
 
@@ -1900,8 +1909,8 @@ class Install extends Console\Command\Command
 			$io,
 			[],
 			[
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SWITCH),
+				MetadataTypes\DataType::BOOLEAN,
+				MetadataTypes\DataType::SWITCH,
 			],
 			$parent,
 		);
@@ -1912,7 +1921,7 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$property = $this->channelsPropertiesManager->update($property, Utils\ArrayHash::from([
 				'name' => $name,
@@ -1920,12 +1929,11 @@ class Install extends Console\Command\Command
 			]));
 			assert($property instanceof DevicesEntities\Channels\Properties\Mapped);
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.update.actor.success',
+					'//virtual-thermostat-addon.cmd.install.messages.update.actor.success',
 					['name' => $property->getName() ?? $property->getIdentifier()],
 				),
 			);
@@ -1934,34 +1942,31 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.update.actor.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.update.actor.error',
+				),
 			);
 
 			return;
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 	}
 
-	private function listActors(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function listActors(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$table = new Console\Helper\Table($io);
 		$table->setHeaders([
 			'#',
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.name'),
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.type'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.name'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.type'),
 		]);
 
 		$actors = $device->getActors();
@@ -1976,27 +1981,30 @@ class Install extends Console\Command\Command
 			static fn (DevicesEntities\Channels\Properties\Property $property): bool =>
 				Utils\Strings::startsWith(
 					$property->getIdentifier(),
-					Types\ChannelPropertyIdentifier::HEATER_ACTOR,
+					Types\ChannelPropertyIdentifier::HEATER_ACTOR->value,
 				)
 				|| Utils\Strings::startsWith(
 					$property->getIdentifier(),
-					Types\ChannelPropertyIdentifier::COOLER_ACTOR,
+					Types\ChannelPropertyIdentifier::COOLER_ACTOR->value,
 				),
 		);
 
 		foreach ($actors as $index => $property) {
 			$type = 'N/A';
 
-			if (Utils\Strings::startsWith($property->getIdentifier(), Types\ChannelPropertyIdentifier::HEATER_ACTOR)) {
+			if (Utils\Strings::startsWith(
+				$property->getIdentifier(),
+				Types\ChannelPropertyIdentifier::HEATER_ACTOR->value,
+			)) {
 				$type = $this->translator->translate(
-					'//thermostat-device-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::HEATER_ACTOR,
+					'//virtual-thermostat-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::HEATER_ACTOR->value,
 				);
 			} elseif (Utils\Strings::startsWith(
 				$property->getIdentifier(),
-				Types\ChannelPropertyIdentifier::COOLER_ACTOR,
+				Types\ChannelPropertyIdentifier::COOLER_ACTOR->value,
 			)) {
 				$type = $this->translator->translate(
-					'//thermostat-device-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::COOLER_ACTOR,
+					'//virtual-thermostat-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::COOLER_ACTOR->value,
 				);
 			}
 
@@ -2013,30 +2021,30 @@ class Install extends Console\Command\Command
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
-	 * @throws DBAL\Exception
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidState
-	 * @throws Exceptions\Runtime
 	 */
-	private function deleteActor(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function deleteActor(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$property = $this->askWhichActor($io, $device);
 
 		if ($property === null) {
-			$io->warning($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noActors'));
+			$io->warning(
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noActors'),
+			);
 
 			return;
 		}
 
 		$io->warning(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.messages.remove.actor.confirm',
+				'//virtual-thermostat-addon.cmd.install.messages.remove.actor.confirm',
 				['name' => $property->getName() ?? $property->getIdentifier()],
 			),
 		);
 
 		$question = new Console\Question\ConfirmationQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.questions.continue'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.questions.continue'),
 			false,
 		);
 
@@ -2048,16 +2056,15 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$this->channelsPropertiesManager->delete($property);
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.remove.actor.success',
+					'//virtual-thermostat-addon.cmd.install.messages.remove.actor.success',
 					['name' => $property->getName() ?? $property->getIdentifier()],
 				),
 			);
@@ -2066,33 +2073,30 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_NS_PANEL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->success(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.remove.actor.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.remove.actor.error',
+				),
 			);
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DBAL\Exception
 	 * @throws DevicesExceptions\InvalidState
 	 * @throws Exceptions\Runtime
 	 * @throws Exception
 	 */
-	private function createSensor(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function createSensor(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$findChannelQuery = new Queries\Entities\FindSensorChannels();
 		$findChannelQuery->forDevice($device);
@@ -2103,48 +2107,59 @@ class Install extends Console\Command\Command
 
 		$sensorType = $this->askSensorType($io);
 
-		if ($sensorType->equalsValue(Types\ChannelPropertyIdentifier::TARGET_SENSOR)) {
+		if ($sensorType === Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR) {
 			$dataTypes = [
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_CHAR),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UCHAR),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SHORT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_USHORT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_INT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UINT),
+				MetadataTypes\DataType::FLOAT,
+				MetadataTypes\DataType::CHAR,
+				MetadataTypes\DataType::UCHAR,
+				MetadataTypes\DataType::SHORT,
+				MetadataTypes\DataType::USHORT,
+				MetadataTypes\DataType::INT,
+				MetadataTypes\DataType::UINT,
 			];
-			$dataType = MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT);
+			$dataType = MetadataTypes\DataType::FLOAT;
 
-		} elseif ($sensorType->equalsValue(Types\ChannelPropertyIdentifier::FLOOR_SENSOR)) {
+		} elseif ($sensorType === Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR) {
 			$dataTypes = [
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_CHAR),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UCHAR),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SHORT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_USHORT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_INT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UINT),
+				MetadataTypes\DataType::FLOAT,
+				MetadataTypes\DataType::CHAR,
+				MetadataTypes\DataType::UCHAR,
+				MetadataTypes\DataType::SHORT,
+				MetadataTypes\DataType::USHORT,
+				MetadataTypes\DataType::INT,
+				MetadataTypes\DataType::UINT,
 			];
-			$dataType = MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT);
+			$dataType = MetadataTypes\DataType::FLOAT;
 
-		} elseif ($sensorType->equalsValue(Types\ChannelPropertyIdentifier::OPENING_SENSOR)) {
+		} elseif ($sensorType === Types\ChannelPropertyIdentifier::OPENING_SENSOR) {
 			$dataTypes = [
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN),
+				MetadataTypes\DataType::BOOLEAN,
 			];
-			$dataType = MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_BOOLEAN);
+			$dataType = MetadataTypes\DataType::BOOLEAN;
+
+		} elseif ($sensorType === Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR) {
+			$dataTypes = [
+				MetadataTypes\DataType::UCHAR,
+				MetadataTypes\DataType::USHORT,
+				MetadataTypes\DataType::UINT,
+				MetadataTypes\DataType::FLOAT,
+			];
+			$dataType = MetadataTypes\DataType::UINT;
 
 		} else {
 			// Log caught exception
 			$this->logger->error(
 				'Invalid sensor type selected',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_NS_PANEL,
-					'type' => 'thermostat-cmd',
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.create.sensor.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.create.sensor.error',
+				),
 			);
 
 			return;
@@ -2155,11 +2170,11 @@ class Install extends Console\Command\Command
 		$sensor = $this->askSensor(
 			$io,
 			array_map(
-				static fn (DevicesEntities\Channels\Properties\Dynamic $heater): string => $heater->getId()->toString(),
+				static fn (DevicesEntities\Channels\Properties\Dynamic $sensor): string => $sensor->getId()->toString(),
 				array_filter(
-					$device->getActors(),
+					$device->getSensors(),
 					// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
-					static fn (DevicesEntities\Channels\Properties\Property $actor): bool => $actor instanceof DevicesEntities\Channels\Properties\Dynamic,
+					static fn (DevicesEntities\Channels\Properties\Property $sensor): bool => $sensor instanceof DevicesEntities\Channels\Properties\Dynamic,
 				),
 			),
 			$dataTypes,
@@ -2171,14 +2186,14 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$property = $this->channelsPropertiesManager->create(Utils\ArrayHash::from([
 				'parent' => $sensor,
 				'entity' => DevicesEntities\Channels\Properties\Mapped::class,
 				'identifier' => $this->findChannelPropertyIdentifier(
 					$sensorsChannel,
-					$sensorType->getValue(),
+					$sensorType,
 				),
 				'name' => $name,
 				'channel' => $sensorsChannel,
@@ -2189,16 +2204,15 @@ class Install extends Console\Command\Command
 				'scale' => null,
 				'step' => null,
 				'settable' => false,
-				'queryable' => true,
+				'queryable' => $sensor->isQueryable(),
 			]));
 			assert($property instanceof DevicesEntities\Channels\Properties\Mapped);
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.create.sensor.success',
+					'//virtual-thermostat-addon.cmd.install.messages.create.sensor.success',
 					['name' => $property->getName() ?? $property->getIdentifier()],
 				),
 			);
@@ -2207,41 +2221,40 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.create.sensor.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.create.sensor.error',
+				),
 			);
 
 			return;
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidState
 	 * @throws Exception
 	 */
-	private function editSensor(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function editSensor(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$property = $this->askWhichSensor($io, $device);
 
 		if ($property === null) {
-			$io->warning($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noSensors'));
+			$io->warning(
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noSensors'),
+			);
 
 			$question = new Console\Question\ConfirmationQuestion(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.questions.create.sensor'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.create.sensor'),
 				false,
 			);
 
@@ -2259,18 +2272,84 @@ class Install extends Console\Command\Command
 
 		$name = $this->askSensorName($io, $property);
 
+		if (
+			Utils\Strings::startsWith(
+				$property->getIdentifier(),
+				Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR->value,
+			)
+		) {
+			$dataTypes = [
+				MetadataTypes\DataType::FLOAT,
+				MetadataTypes\DataType::CHAR,
+				MetadataTypes\DataType::UCHAR,
+				MetadataTypes\DataType::SHORT,
+				MetadataTypes\DataType::USHORT,
+				MetadataTypes\DataType::INT,
+				MetadataTypes\DataType::UINT,
+			];
+
+		} elseif (
+			Utils\Strings::startsWith(
+				$property->getIdentifier(),
+				Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR->value,
+			)
+		) {
+			$dataTypes = [
+				MetadataTypes\DataType::FLOAT,
+				MetadataTypes\DataType::CHAR,
+				MetadataTypes\DataType::UCHAR,
+				MetadataTypes\DataType::SHORT,
+				MetadataTypes\DataType::USHORT,
+				MetadataTypes\DataType::INT,
+				MetadataTypes\DataType::UINT,
+			];
+
+		} elseif (
+			Utils\Strings::startsWith(
+				$property->getIdentifier(),
+				Types\ChannelPropertyIdentifier::OPENING_SENSOR->value,
+			)
+		) {
+			$dataTypes = [
+				MetadataTypes\DataType::BOOLEAN,
+			];
+
+		} elseif (
+			Utils\Strings::startsWith(
+				$property->getIdentifier(),
+				Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR->value,
+			)
+		) {
+			$dataTypes = [
+				MetadataTypes\DataType::UCHAR,
+				MetadataTypes\DataType::USHORT,
+				MetadataTypes\DataType::UINT,
+				MetadataTypes\DataType::FLOAT,
+			];
+
+		} else {
+			// Log caught exception
+			$this->logger->error(
+				'Invalid sensor type selected',
+				[
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+				],
+			);
+
+			$io->error(
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.edit.sensor.error',
+				),
+			);
+
+			return;
+		}
+
 		$parent = $this->askSensor(
 			$io,
 			[],
-			[
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_CHAR),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UCHAR),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_SHORT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_USHORT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_INT),
-				MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_UINT),
-			],
+			$dataTypes,
 			$parent,
 		);
 
@@ -2280,7 +2359,7 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$property = $this->channelsPropertiesManager->update($property, Utils\ArrayHash::from([
 				'parent' => $parent,
@@ -2288,12 +2367,11 @@ class Install extends Console\Command\Command
 			]));
 			assert($property instanceof DevicesEntities\Channels\Properties\Mapped);
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.update.sensor.success',
+					'//virtual-thermostat-addon.cmd.install.messages.update.sensor.success',
 					['name' => $property->getName() ?? $property->getIdentifier()],
 				),
 			);
@@ -2302,34 +2380,31 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.update.sensor.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.update.sensor.error',
+				),
 			);
 
 			return;
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 	}
 
-	private function listSensors(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function listSensors(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$table = new Console\Helper\Table($io);
 		$table->setHeaders([
 			'#',
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.name'),
-			$this->translator->translate('//thermostat-device-addon.cmd.install.data.type'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.name'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.data.type'),
 		]);
 
 		$sensors = $device->getSensors();
@@ -2344,15 +2419,19 @@ class Install extends Console\Command\Command
 			static fn (DevicesEntities\Channels\Properties\Property $property): bool =>
 				Utils\Strings::startsWith(
 					$property->getIdentifier(),
-					Types\ChannelPropertyIdentifier::TARGET_SENSOR,
+					Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR->value,
 				)
 				|| Utils\Strings::startsWith(
 					$property->getIdentifier(),
-					Types\ChannelPropertyIdentifier::FLOOR_SENSOR,
+					Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR->value,
 				)
 				|| Utils\Strings::startsWith(
 					$property->getIdentifier(),
-					Types\ChannelPropertyIdentifier::OPENING_SENSOR,
+					Types\ChannelPropertyIdentifier::OPENING_SENSOR->value,
+				)
+				|| Utils\Strings::startsWith(
+					$property->getIdentifier(),
+					Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR->value,
 				),
 		);
 
@@ -2361,24 +2440,31 @@ class Install extends Console\Command\Command
 
 			if (Utils\Strings::startsWith(
 				$property->getIdentifier(),
-				Types\ChannelPropertyIdentifier::TARGET_SENSOR,
+				Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR->value,
 			)) {
 				$type = $this->translator->translate(
-					'//thermostat-device-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::TARGET_SENSOR,
+					'//virtual-thermostat-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR->value,
 				);
 			} elseif (Utils\Strings::startsWith(
 				$property->getIdentifier(),
-				Types\ChannelPropertyIdentifier::FLOOR_SENSOR,
+				Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR->value,
 			)) {
 				$type = $this->translator->translate(
-					'//thermostat-device-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::FLOOR_SENSOR,
+					'//virtual-thermostat-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR->value,
 				);
 			} elseif (Utils\Strings::startsWith(
 				$property->getIdentifier(),
-				Types\ChannelPropertyIdentifier::OPENING_SENSOR,
+				Types\ChannelPropertyIdentifier::OPENING_SENSOR->value,
 			)) {
 				$type = $this->translator->translate(
-					'//thermostat-device-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::OPENING_SENSOR,
+					'//virtual-thermostat-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::OPENING_SENSOR->value,
+				);
+			} elseif (Utils\Strings::startsWith(
+				$property->getIdentifier(),
+				Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR->value,
+			)) {
+				$type = $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.data.' . Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR->value,
 				);
 			}
 
@@ -2395,30 +2481,30 @@ class Install extends Console\Command\Command
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
-	 * @throws DBAL\Exception
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidState
-	 * @throws Exceptions\Runtime
 	 */
-	private function deleteSensor(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function deleteSensor(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$property = $this->askWhichSensor($io, $device);
 
 		if ($property === null) {
-			$io->warning($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noSensors'));
+			$io->warning(
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noSensors'),
+			);
 
 			return;
 		}
 
 		$io->warning(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.messages.remove.sensor.confirm',
+				'//virtual-thermostat-addon.cmd.install.messages.remove.sensor.confirm',
 				['name' => $property->getName() ?? $property->getIdentifier()],
 			),
 		);
 
 		$question = new Console\Question\ConfirmationQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.questions.continue'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.questions.continue'),
 			false,
 		);
 
@@ -2430,16 +2516,15 @@ class Install extends Console\Command\Command
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			$this->channelsPropertiesManager->delete($property);
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.remove.sensor.success',
+					'//virtual-thermostat-addon.cmd.install.messages.remove.sensor.success',
 					['name' => $property->getName() ?? $property->getIdentifier()],
 				),
 			);
@@ -2448,42 +2533,42 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_NS_PANEL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->success(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.remove.sensor.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.remove.sensor.error',
+				),
 			);
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
-	 * @throws DBAL\Exception
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidArgument
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
-	 * @throws Exceptions\Runtime
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
-	 * @throws MetadataExceptions\MalformedInput
+	 * @throws ToolsExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	private function editPreset(Style\SymfonyStyle $io, Entities\ThermostatDevice $device): void
+	private function editPreset(Style\SymfonyStyle $io, Entities\Devices\Device $device): void
 	{
 		$preset = $this->askWhichPreset($io, $device);
 
 		if ($preset === null) {
-			$io->warning($this->translator->translate('//thermostat-device-addon.cmd.install.messages.noPresets'));
+			$io->warning(
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.messages.noPresets'),
+			);
 
 			return;
 		}
@@ -2500,7 +2585,7 @@ class Install extends Console\Command\Command
 
 		$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelVariableProperties();
 		$findChannelPropertyQuery->forChannel($configuration);
-		$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::UNIT);
+		$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::UNIT->value);
 
 		$unitProperty = $this->channelsPropertiesRepository->findOneBy(
 			$findChannelPropertyQuery,
@@ -2510,7 +2595,7 @@ class Install extends Console\Command\Command
 
 		$findChannelQuery = new Queries\Entities\FindPresetChannels();
 		$findChannelQuery->forDevice($device);
-		$findChannelQuery->endWithIdentifier($preset->getValue());
+		$findChannelQuery->endWithIdentifier($preset->value);
 
 		$channel = $this->channelsRepository->findOneBy($findChannelQuery, Entities\Channels\Preset::class);
 
@@ -2519,24 +2604,33 @@ class Install extends Console\Command\Command
 		if ($channel !== null) {
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
 			$findChannelPropertyQuery->forChannel($channel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE);
+			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::TARGET_ROOM_TEMPERATURE->value);
 
 			$targetTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
 			$findChannelPropertyQuery->forChannel($channel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE);
+			$findChannelPropertyQuery->byIdentifier(
+				Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE->value,
+			);
 
 			$heatingThresholdTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 
 			$findChannelPropertyQuery = new DevicesQueries\Entities\FindChannelProperties();
 			$findChannelPropertyQuery->forChannel($channel);
-			$findChannelPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE);
+			$findChannelPropertyQuery->byIdentifier(
+				Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE->value,
+			);
 
 			$coolingThresholdTempProperty = $this->channelsPropertiesRepository->findOneBy($findChannelPropertyQuery);
 		}
 
-		$targetTemp = $this->askTargetTemperature($io, $preset, Types\Unit::get($unitProperty->getValue()), $device);
+		$targetTemp = $this->askTargetTemperature(
+			$io,
+			$preset,
+			Types\Unit::from(MetadataUtilities\Value::toString($unitProperty->getValue(), true)),
+			$device,
+		);
 
 		$heatingThresholdTemp = $coolingThresholdTemp = null;
 
@@ -2544,27 +2638,27 @@ class Install extends Console\Command\Command
 			$heatingThresholdTemp = $this->askHeatingThresholdTemperature(
 				$io,
 				$preset,
-				Types\Unit::get($unitProperty->getValue()),
+				Types\Unit::from(MetadataUtilities\Value::toString($unitProperty->getValue(), true)),
 				$device,
 			);
 
 			$coolingThresholdTemp = $this->askCoolingThresholdTemperature(
 				$io,
 				$preset,
-				Types\Unit::get($unitProperty->getValue()),
+				Types\Unit::from(MetadataUtilities\Value::toString($unitProperty->getValue(), true)),
 				$device,
 			);
 		}
 
 		try {
 			// Start transaction connection to the database
-			$this->getOrmConnection()->beginTransaction();
+			$this->databaseHelper->beginTransaction();
 
 			if ($channel === null) {
 				$channel = $this->channelsManager->create(Utils\ArrayHash::from([
 					'entity' => Entities\Channels\Preset::class,
 					'device' => $device,
-					'identifier' => 'preset_' . $preset,
+					'identifier' => 'preset_' . $preset->value,
 				]));
 				assert($channel instanceof Entities\Channels\Preset);
 			}
@@ -2573,16 +2667,17 @@ class Install extends Console\Command\Command
 				DevicesEntities\Channels\Properties\Dynamic::class,
 				Utils\ArrayHash::from([
 					'entity' => DevicesEntities\Channels\Properties\Dynamic::class,
-					'identifier' => Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE,
+					'identifier' => Types\ChannelPropertyIdentifier::TARGET_ROOM_TEMPERATURE->value,
 					'channel' => $channel,
-					'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-					'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+					'dataType' => MetadataTypes\DataType::FLOAT,
+					'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 					'unit' => null,
 					'invalid' => null,
 					'scale' => null,
-					'step' => Entities\ThermostatDevice::PRECISION,
+					'step' => Entities\Devices\Device::PRECISION,
 					'settable' => true,
 					'queryable' => true,
+					'default' => Entities\Devices\Device::TARGET_TEMPERATURE,
 				]),
 				$targetTempProperty,
 			);
@@ -2592,14 +2687,14 @@ class Install extends Console\Command\Command
 					DevicesEntities\Channels\Properties\Variable::class,
 					Utils\ArrayHash::from([
 						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE,
+						'identifier' => Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE->value,
 						'channel' => $channel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+						'dataType' => MetadataTypes\DataType::FLOAT,
+						'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 						'unit' => null,
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
+						'step' => Entities\Devices\Device::PRECISION,
 						'default' => null,
 						'value' => $heatingThresholdTemp,
 					]),
@@ -2610,14 +2705,14 @@ class Install extends Console\Command\Command
 					DevicesEntities\Channels\Properties\Variable::class,
 					Utils\ArrayHash::from([
 						'entity' => DevicesEntities\Channels\Properties\Variable::class,
-						'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE,
+						'identifier' => Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE->value,
 						'channel' => $channel,
-						'dataType' => MetadataTypes\DataType::get(MetadataTypes\DataType::DATA_TYPE_FLOAT),
-						'format' => [Entities\ThermostatDevice::MINIMUM_TEMPERATURE, Entities\ThermostatDevice::MAXIMUM_TEMPERATURE],
+						'dataType' => MetadataTypes\DataType::FLOAT,
+						'format' => [Entities\Devices\Device::MINIMUM_TEMPERATURE, Entities\Devices\Device::MAXIMUM_TEMPERATURE],
 						'unit' => null,
 						'invalid' => null,
 						'scale' => null,
-						'step' => Entities\ThermostatDevice::PRECISION,
+						'step' => Entities\Devices\Device::PRECISION,
 						'default' => null,
 						'value' => $coolingThresholdTemp,
 					]),
@@ -2625,12 +2720,11 @@ class Install extends Console\Command\Command
 				);
 			}
 
-			// Commit all changes into database
-			$this->getOrmConnection()->commit();
+			$this->databaseHelper->commitTransaction();
 
 			$io->success(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.update.device.success',
+					'//virtual-thermostat-addon.cmd.install.messages.update.device.success',
 					['name' => $device->getName() ?? $device->getIdentifier()],
 				),
 			);
@@ -2639,21 +2733,18 @@ class Install extends Console\Command\Command
 			$this->logger->error(
 				'An unhandled error occurred',
 				[
-					'source' => MetadataTypes\ConnectorSource::SOURCE_CONNECTOR_VIRTUAL,
-					'type' => 'thermostat-cmd',
-					'exception' => BootstrapHelpers\Logger::buildException($ex),
+					'source' => MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT->value,
+					'type' => 'install-cmd',
+					'exception' => ApplicationHelpers\Logger::buildException($ex),
 				],
 			);
 
 			$io->error(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.update.device.error'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.update.device.error',
+				),
 			);
 		} finally {
-			// Revert all changes when error occur
-			if ($this->getOrmConnection()->isTransactionActive()) {
-				$this->getOrmConnection()->rollBack();
-			}
-
 			$this->databaseHelper->clear();
 		}
 
@@ -2661,25 +2752,24 @@ class Install extends Console\Command\Command
 
 		$targetTempConfiguration = $this->channelsPropertiesConfigurationRepository->find(
 			$targetTempProperty->getId(),
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
 		assert($targetTempConfiguration !== null);
 
-		$this->channelPropertiesStatesManager->setValue(
+		$this->channelPropertiesStatesManager->set(
 			$targetTempConfiguration,
 			Utils\ArrayHash::from([
 				DevicesStates\Property::ACTUAL_VALUE_FIELD => $targetTemp,
 				DevicesStates\Property::EXPECTED_VALUE_FIELD => null,
-				DevicesStates\Property::VALID_FIELD => true,
-				DevicesStates\Property::PENDING_FIELD => false,
 			]),
+			MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
 		);
 	}
 
-	private function askDeviceName(Style\SymfonyStyle $io, Entities\ThermostatDevice|null $device = null): string|null
+	private function askDeviceName(Style\SymfonyStyle $io, Entities\Devices\Device|null $device = null): string|null
 	{
 		$question = new Console\Question\Question(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.provide.device.name'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.provide.device.name'),
 			$device?->getName(),
 		);
 
@@ -2689,10 +2779,12 @@ class Install extends Console\Command\Command
 	}
 
 	/**
-	 * @return array<string>
+	 * @return array<Types\HvacMode>
 	 *
 	 * @throws Exceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askThermostatModes(
 		Style\SymfonyStyle $io,
@@ -2702,50 +2794,52 @@ class Install extends Console\Command\Command
 		if (
 			$property !== null
 			&& (
-				$property->getIdentifier() !== Types\ChannelPropertyIdentifier::HVAC_MODE
-				|| !$property->getFormat() instanceof MetadataValueObjects\StringEnumFormat
+				$property->getIdentifier() !== Types\ChannelPropertyIdentifier::HVAC_MODE->value
+				|| !$property->getFormat() instanceof MetadataFormats\StringEnum
 			)
 		) {
 			throw new Exceptions\InvalidArgument('Provided property is not valid');
 		}
 
 		$format = $property?->getFormat();
-		assert($format === null || $format instanceof MetadataValueObjects\StringEnumFormat);
+		assert($format === null || $format instanceof MetadataFormats\StringEnum);
 
 		$default = array_filter(
 			array_unique(array_map(static fn ($item): int|null => match ($item) {
-					Types\HvacMode::HEAT => 0,
-					Types\HvacMode::COOL => 1,
-					Types\HvacMode::AUTO => 2,
+					Types\HvacMode::HEAT->value => 0,
+					Types\HvacMode::COOL->value => 1,
+					Types\HvacMode::AUTO->value => 2,
 					default => null,
-			}, $format?->toArray() ?? [Types\HvacMode::HEAT])),
+			}, $format?->toArray() ?? [Types\HvacMode::HEAT->value])),
 			static fn (int|null $item): bool => $item !== null,
 		);
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.mode'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.select.mode'),
 			[
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.mode.' . Types\HvacMode::HEAT,
+					'//virtual-thermostat-addon.cmd.install.answers.mode.' . Types\HvacMode::HEAT->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.mode.' . Types\HvacMode::COOL,
+					'//virtual-thermostat-addon.cmd.install.answers.mode.' . Types\HvacMode::COOL->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.mode.' . Types\HvacMode::AUTO,
+					'//virtual-thermostat-addon.cmd.install.answers.mode.' . Types\HvacMode::AUTO->value,
 				),
 			],
 			implode(',', $default),
 		);
 		$question->setMultiselect(true);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(function (string|int|null $answer): array {
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -2756,7 +2850,7 @@ class Install extends Console\Command\Command
 			foreach (explode(',', strval($answer)) as $item) {
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.mode.' . Types\HvacMode::HEAT,
+						'//virtual-thermostat-addon.cmd.install.answers.mode.' . Types\HvacMode::HEAT->value,
 					)
 					|| $item === '0'
 				) {
@@ -2765,7 +2859,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.mode.' . Types\HvacMode::COOL,
+						'//virtual-thermostat-addon.cmd.install.answers.mode.' . Types\HvacMode::COOL->value,
 					)
 					|| $item === '1'
 				) {
@@ -2774,7 +2868,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.mode.' . Types\HvacMode::AUTO,
+						'//virtual-thermostat-addon.cmd.install.answers.mode.' . Types\HvacMode::AUTO->value,
 					)
 					|| $item === '2'
 				) {
@@ -2788,7 +2882,7 @@ class Install extends Console\Command\Command
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -2811,6 +2905,8 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askThermostatUnits(
 		Style\SymfonyStyle $io,
@@ -2820,36 +2916,40 @@ class Install extends Console\Command\Command
 		if (
 			$property !== null
 			&& (
-				$property->getIdentifier() !== Types\ChannelPropertyIdentifier::UNIT
-				|| !$property->getFormat() instanceof MetadataValueObjects\StringEnumFormat
+				$property->getIdentifier() !== Types\ChannelPropertyIdentifier::UNIT->value
+				|| !$property->getFormat() instanceof MetadataFormats\StringEnum
 			)
 		) {
 			throw new Exceptions\InvalidArgument('Provided property is not valid');
 		}
 
-		$default = match ($property?->getValue() ?? Types\Unit::CELSIUS) {
-			Types\Unit::CELSIUS => 0,
-			Types\Unit::FAHRENHEIT => 1,
+		$default = match ($property?->getValue() ?? Types\Unit::CELSIUS->value) {
+			Types\Unit::CELSIUS->value => 0,
+			Types\Unit::FAHRENHEIT->value => 1,
 			default => 0,
 		};
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.provide.device.unit'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.provide.device.unit'),
 			[
-				0 => $this->translator->translate('//thermostat-device-addon.cmd.install.answers.unit.celsius'),
-				1 => $this->translator->translate('//thermostat-device-addon.cmd.install.answers.unit.fahrenheit'),
+				0 => $this->translator->translate('//virtual-thermostat-addon.cmd.install.answers.unit.celsius'),
+				1 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.answers.unit.fahrenheit',
+				),
 			],
 			$default,
 		);
 
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(function (string|null $answer): Types\Unit {
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -2857,25 +2957,25 @@ class Install extends Console\Command\Command
 
 			if (
 				$answer === $this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.unit.celsius',
+					'//virtual-thermostat-addon.cmd.install.answers.unit.celsius',
 				)
 				|| $answer === '0'
 			) {
-				return Types\Unit::get(Types\Unit::CELSIUS);
+				return Types\Unit::CELSIUS;
 			}
 
 			if (
 				$answer === $this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.unit.fahrenheit',
+					'//virtual-thermostat-addon.cmd.install.answers.unit.fahrenheit',
 				)
 				|| $answer === '1'
 			) {
-				return Types\Unit::get(Types\Unit::FAHRENHEIT);
+				return Types\Unit::FAHRENHEIT;
 			}
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -2888,10 +2988,12 @@ class Install extends Console\Command\Command
 	}
 
 	/**
-	 * @return array<string>
+	 * @return array<Types\Preset>
 	 *
 	 * @throws Exceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askPresets(
 		Style\SymfonyStyle $io,
@@ -2901,72 +3003,74 @@ class Install extends Console\Command\Command
 		if (
 			$property !== null
 			&& (
-				$property->getIdentifier() !== Types\ChannelPropertyIdentifier::PRESET_MODE
-				|| !$property->getFormat() instanceof MetadataValueObjects\StringEnumFormat
+				$property->getIdentifier() !== Types\ChannelPropertyIdentifier::PRESET_MODE->value
+				|| !$property->getFormat() instanceof MetadataFormats\StringEnum
 			)
 		) {
 			throw new Exceptions\InvalidArgument('Provided property is not valid');
 		}
 
 		$format = $property?->getFormat();
-		assert($format === null || $format instanceof MetadataValueObjects\StringEnumFormat);
+		assert($format === null || $format instanceof MetadataFormats\StringEnum);
 
 		$default = array_filter(
 			array_unique(array_map(static fn ($item): int|null => match ($item) {
-				Types\Preset::AWAY => 0,
-				Types\Preset::ECO => 1,
-				Types\Preset::HOME => 2,
-				Types\Preset::COMFORT => 3,
-				Types\Preset::SLEEP => 4,
-				Types\Preset::ANTI_FREEZE => 5,
+				Types\Preset::AWAY->value => 0,
+				Types\Preset::ECO->value => 1,
+				Types\Preset::HOME->value => 2,
+				Types\Preset::COMFORT->value => 3,
+				Types\Preset::SLEEP->value => 4,
+				Types\Preset::ANTI_FREEZE->value => 5,
 				default => null,
 			}, $format?->toArray() ?? [
-				Types\Preset::AWAY,
-				Types\Preset::ECO,
-				Types\Preset::HOME,
-				Types\Preset::COMFORT,
-				Types\Preset::SLEEP,
-				Types\Preset::ANTI_FREEZE,
+				Types\Preset::AWAY->value,
+				Types\Preset::ECO->value,
+				Types\Preset::HOME->value,
+				Types\Preset::COMFORT->value,
+				Types\Preset::SLEEP->value,
+				Types\Preset::ANTI_FREEZE->value,
 			])),
 			static fn (int|null $item): bool => $item !== null,
 		);
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.preset'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.select.preset'),
 			[
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::AWAY,
+					'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::AWAY->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::ECO,
+					'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::ECO->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::HOME,
+					'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::HOME->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::COMFORT,
+					'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::COMFORT->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::SLEEP,
+					'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::SLEEP->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::ANTI_FREEZE,
+					'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::ANTI_FREEZE->value,
 				),
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.answers.preset.none',
+					'//virtual-thermostat-addon.cmd.install.answers.preset.none',
 				),
 			],
 			$default !== [] ? implode(',', $default) : '6',
 		);
 		$question->setMultiselect(true);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(function (string|int|null $answer): array {
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -2977,7 +3081,7 @@ class Install extends Console\Command\Command
 			foreach (explode(',', strval($answer)) as $item) {
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::AWAY,
+						'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::AWAY->value,
 					)
 					|| $item === '0'
 				) {
@@ -2986,7 +3090,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::ECO,
+						'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::ECO->value,
 					)
 					|| $item === '1'
 				) {
@@ -2995,7 +3099,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::HOME,
+						'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::HOME->value,
 					)
 					|| $item === '2'
 				) {
@@ -3004,7 +3108,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::COMFORT,
+						'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::COMFORT->value,
 					)
 					|| $item === '3'
 				) {
@@ -3013,7 +3117,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::SLEEP,
+						'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::SLEEP->value,
 					)
 					|| $item === '4'
 				) {
@@ -3022,7 +3126,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.preset.' . Types\Preset::ANTI_FREEZE,
+						'//virtual-thermostat-addon.cmd.install.answers.preset.' . Types\Preset::ANTI_FREEZE->value,
 					)
 					|| $item === '5'
 				) {
@@ -3031,7 +3135,7 @@ class Install extends Console\Command\Command
 
 				if (
 					$item === $this->translator->translate(
-						'//thermostat-device-addon.cmd.install.answers.preset.none',
+						'//virtual-thermostat-addon.cmd.install.answers.preset.none',
 					)
 					|| $item === '6'
 				) {
@@ -3045,7 +3149,7 @@ class Install extends Console\Command\Command
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -3054,44 +3158,49 @@ class Install extends Console\Command\Command
 		$presets = $io->askQuestion($question);
 		assert(is_array($presets));
 
-		return $presets;
+		return array_merge([Types\Preset::MANUAL], $presets);
 	}
 
 	/**
+	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askActorType(
 		Style\SymfonyStyle $io,
-		Entities\ThermostatDevice $device,
+		Entities\Devices\Device $device,
 	): Types\ChannelPropertyIdentifier
 	{
 		$types = [];
 
 		if (in_array(Types\HvacMode::HEAT, $device->getHvacModes(), true)) {
-			$types[Types\ChannelPropertyIdentifier::HEATER_ACTOR] = $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.answers.actor.heater',
+			$types[Types\ChannelPropertyIdentifier::HEATER_ACTOR->value] = $this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.answers.actor.heater',
 			);
 		}
 
 		if (in_array(Types\HvacMode::COOL, $device->getHvacModes(), true)) {
-			$types[Types\ChannelPropertyIdentifier::COOLER_ACTOR] = $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.answers.actor.cooler',
+			$types[Types\ChannelPropertyIdentifier::COOLER_ACTOR->value] = $this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.answers.actor.cooler',
 			);
 		}
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.actorType'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.select.actorType'),
 			array_values($types),
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
 			function (string|int|null $answer) use ($types): Types\ChannelPropertyIdentifier {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -3103,13 +3212,15 @@ class Install extends Console\Command\Command
 
 				$type = array_search($answer, $types, true);
 
-				if ($type !== false && Types\ChannelPropertyIdentifier::isValidValue($type)) {
-					return Types\ChannelPropertyIdentifier::get($type);
+				if ($type !== false) {
+					return Types\ChannelPropertyIdentifier::from($type);
 				}
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3128,7 +3239,7 @@ class Install extends Console\Command\Command
 	): string|null
 	{
 		$question = new Console\Question\Question(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.provide.actor.name'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.provide.actor.name'),
 			$property?->getName(),
 		);
 
@@ -3167,7 +3278,7 @@ class Install extends Console\Command\Command
 		if (!$parent instanceof DevicesEntities\Channels\Properties\Dynamic) {
 			$io->error(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.property.notSupported',
+					'//virtual-thermostat-addon.cmd.install.messages.property.notSupported',
 				),
 			);
 
@@ -3182,30 +3293,35 @@ class Install extends Console\Command\Command
 	): Types\ChannelPropertyIdentifier
 	{
 		$types = [
-			Types\ChannelPropertyIdentifier::TARGET_SENSOR => $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.answers.sensor.targetTemperature',
+			Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR->value => $this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.answers.sensor.roomTemperature',
 			),
-			Types\ChannelPropertyIdentifier::FLOOR_SENSOR => $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.answers.sensor.floorTemperature',
+			Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR->value => $this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.answers.sensor.floorTemperature',
 			),
-			Types\ChannelPropertyIdentifier::OPENING_SENSOR => $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.answers.sensor.sensor',
+			Types\ChannelPropertyIdentifier::OPENING_SENSOR->value => $this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.answers.sensor.opening',
+			),
+			Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR->value => $this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.answers.sensor.roomHumidity',
 			),
 		];
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.sensorType'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.select.sensorType'),
 			array_values($types),
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
 			function (string|int|null $answer) use ($types): Types\ChannelPropertyIdentifier {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -3217,13 +3333,15 @@ class Install extends Console\Command\Command
 
 				$type = array_search($answer, $types, true);
 
-				if ($type !== false && Types\ChannelPropertyIdentifier::isValidValue($type)) {
-					return Types\ChannelPropertyIdentifier::get($type);
+				if ($type !== false) {
+					return Types\ChannelPropertyIdentifier::from($type);
 				}
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3242,7 +3360,7 @@ class Install extends Console\Command\Command
 	): string|null
 	{
 		$question = new Console\Question\Question(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.provide.sensor.name'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.provide.sensor.name'),
 			$property?->getName(),
 		);
 
@@ -3271,8 +3389,6 @@ class Install extends Console\Command\Command
 			$allowedDataTypes,
 			DevicesEntities\Channels\Properties\Dynamic::class,
 			$property,
-			null,
-			true,
 		);
 
 		if ($parent === null) {
@@ -3282,7 +3398,7 @@ class Install extends Console\Command\Command
 		if (!$parent instanceof DevicesEntities\Channels\Properties\Dynamic) {
 			$io->error(
 				$this->translator->translate(
-					'//thermostat-device-addon.cmd.install.messages.property.notSupported',
+					'//virtual-thermostat-addon.cmd.install.messages.property.notSupported',
 				),
 			);
 
@@ -3293,17 +3409,13 @@ class Install extends Console\Command\Command
 	}
 
 	/**
-	 * @throws DevicesExceptions\InvalidArgument
 	 * @throws DevicesExceptions\InvalidState
-	 * @throws MetadataExceptions\InvalidArgument
-	 * @throws MetadataExceptions\InvalidState
-	 * @throws MetadataExceptions\MalformedInput
 	 */
 	private function askTargetTemperature(
 		Style\SymfonyStyle $io,
 		Types\Preset $thermostatMode,
 		Types\Unit $unit,
-		Entities\ThermostatDevice|null $device = null,
+		Entities\Devices\Device|null $device = null,
 	): float
 	{
 		try {
@@ -3312,25 +3424,31 @@ class Install extends Console\Command\Command
 			$property = null;
 		}
 
-		$targetTemp = null;
+		$targetTemp = Entities\Devices\Device::TARGET_TEMPERATURE;
 
 		if ($property !== null) {
 			$propertyConfiguration = $this->channelsPropertiesConfigurationRepository->find(
 				$property->getId(),
-				MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+				DevicesDocuments\Channels\Properties\Dynamic::class,
 			);
 			assert($propertyConfiguration !== null);
 
-			$state = $this->channelPropertiesStatesManager->readValue($propertyConfiguration);
+			$state = $this->channelPropertiesStatesManager->read(
+				$propertyConfiguration,
+				MetadataTypes\Sources\Addon::VIRTUAL_THERMOSTAT,
+			);
 
-			$targetTemp = $state?->getActualValue();
+			if ($state instanceof DevicesDocuments\States\Channels\Properties\Property) {
+				$targetTemp = $state->getGet()->getActualValue();
+			}
+
 			assert(is_numeric($targetTemp) || $targetTemp === null);
 		}
 
 		$question = new Console\Question\Question(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.questions.provide.targetTemperature.' . $thermostatMode->getValue(),
-				['unit' => $unit->getValue()],
+				'//virtual-thermostat-addon.cmd.install.questions.provide.targetTemperature.' . $thermostatMode->value,
+				['unit' => $unit->value],
 			),
 			$targetTemp,
 		);
@@ -3338,7 +3456,9 @@ class Install extends Console\Command\Command
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3350,7 +3470,7 @@ class Install extends Console\Command\Command
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -3366,25 +3486,29 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askMaxFloorTemperature(
 		Style\SymfonyStyle $io,
 		Types\Unit $unit,
-		Entities\ThermostatDevice|null $device = null,
+		Entities\Devices\Device|null $device = null,
 	): float
 	{
 		$question = new Console\Question\Question(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.questions.provide.maximumFloorTemperature',
-				['unit' => $unit->getValue()],
+				'//virtual-thermostat-addon.cmd.install.questions.provide.maximumFloorTemperature',
+				['unit' => $unit->value],
 			),
-			$device?->getMaximumFloorTemp() ?? Entities\ThermostatDevice::MAXIMUM_FLOOR_TEMPERATURE,
+			$device?->getMaximumFloorTemp() ?? Entities\Devices\Device::MAXIMUM_FLOOR_TEMPERATURE,
 		);
 		$question->setValidator(function (string|int|null $answer): float {
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3396,7 +3520,7 @@ class Install extends Console\Command\Command
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -3412,18 +3536,20 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askHeatingThresholdTemperature(
 		Style\SymfonyStyle $io,
 		Types\Preset $thermostatMode,
 		Types\Unit $unit,
-		Entities\ThermostatDevice|null $device = null,
+		Entities\Devices\Device|null $device = null,
 	): float
 	{
 		$question = new Console\Question\Question(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.questions.provide.heatingThresholdTemperature',
-				['unit' => $unit->getValue()],
+				'//virtual-thermostat-addon.cmd.install.questions.provide.heatingThresholdTemperature',
+				['unit' => $unit->value],
 			),
 			$device?->getHeatingThresholdTemp($thermostatMode),
 		);
@@ -3431,7 +3557,9 @@ class Install extends Console\Command\Command
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3443,7 +3571,7 @@ class Install extends Console\Command\Command
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -3459,18 +3587,20 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askCoolingThresholdTemperature(
 		Style\SymfonyStyle $io,
 		Types\Preset $thermostatMode,
 		Types\Unit $unit,
-		Entities\ThermostatDevice|null $device = null,
+		Entities\Devices\Device|null $device = null,
 	): float
 	{
 		$question = new Console\Question\Question(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.questions.provide.coolingThresholdTemperature',
-				['unit' => $unit->getValue()],
+				'//virtual-thermostat-addon.cmd.install.questions.provide.coolingThresholdTemperature',
+				['unit' => $unit->value],
 			),
 			$device?->getCoolingThresholdTemp($thermostatMode),
 		);
@@ -3478,7 +3608,9 @@ class Install extends Console\Command\Command
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3490,7 +3622,7 @@ class Install extends Console\Command\Command
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -3517,7 +3649,6 @@ class Install extends Console\Command\Command
 		string|null $onlyType = null,
 		DevicesEntities\Channels\Properties\Dynamic|DevicesEntities\Channels\Properties\Variable|null $connectedProperty = null,
 		bool|null $settable = null,
-		bool|null $queryable = null,
 	): DevicesEntities\Channels\Properties\Dynamic|DevicesEntities\Channels\Properties\Variable|null
 	{
 		$devices = [];
@@ -3540,7 +3671,7 @@ class Install extends Console\Command\Command
 		);
 
 		foreach ($systemDevices as $device) {
-			if ($device instanceof Entities\ThermostatDevice) {
+			if ($device instanceof Entities\Devices\Device) {
 				continue;
 			}
 
@@ -3558,10 +3689,6 @@ class Install extends Console\Command\Command
 
 					if ($settable === true) {
 						$findChannelPropertiesQuery->settable(true);
-					}
-
-					if ($queryable === true) {
-						$findChannelPropertiesQuery->queryable(true);
 					}
 
 					if ($allowedDataTypes === null) {
@@ -3605,10 +3732,6 @@ class Install extends Console\Command\Command
 						$findChannelPropertiesQuery->settable(true);
 					}
 
-					if ($queryable === true) {
-						$findChannelPropertiesQuery->queryable(true);
-					}
-
 					if ($allowedDataTypes === null) {
 						if (
 							$this->channelsPropertiesRepository->getResultSet(
@@ -3647,14 +3770,15 @@ class Install extends Console\Command\Command
 				continue;
 			}
 
-			// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
 			$devices[$device->getId()->toString()] = '[' . ($device->getConnector()->getName() ?? $device->getConnector()->getIdentifier()) . '] '
 				. ($device->getName() ?? $device->getIdentifier());
 		}
 
 		if (count($devices) === 0) {
 			$io->warning(
-				$this->translator->translate('//thermostat-device-addon.cmd.install.messages.noHardwareDevices'),
+				$this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.messages.noHardwareDevices',
+				),
 			);
 
 			return null;
@@ -3673,18 +3797,20 @@ class Install extends Console\Command\Command
 		}
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.mappedDevice'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.select.mappedDevice'),
 			array_values($devices),
 			$default,
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(function (string|null $answer) use ($devices): DevicesEntities\Devices\Device {
 			if ($answer === null) {
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3706,7 +3832,7 @@ class Install extends Console\Command\Command
 
 			throw new Exceptions\Runtime(
 				sprintf(
-					$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+					$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 					$answer,
 				),
 			);
@@ -3738,10 +3864,6 @@ class Install extends Console\Command\Command
 
 				if ($settable === true) {
 					$findChannelPropertiesQuery->settable(true);
-				}
-
-				if ($queryable === true) {
-					$findChannelPropertiesQuery->queryable(true);
 				}
 
 				if ($allowedDataTypes === null) {
@@ -3779,10 +3901,6 @@ class Install extends Console\Command\Command
 
 				if ($settable === true) {
 					$findChannelPropertiesQuery->settable(true);
-				}
-
-				if ($queryable === true) {
-					$findChannelPropertiesQuery->queryable(true);
 				}
 
 				if ($allowedDataTypes === null) {
@@ -3835,20 +3953,22 @@ class Install extends Console\Command\Command
 
 		$question = new Console\Question\ChoiceQuestion(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.questions.select.mappedDeviceChannel',
+				'//virtual-thermostat-addon.cmd.install.questions.select.mappedDeviceChannel',
 			),
 			array_values($channels),
 			$default,
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
 			function (string|null $answer) use ($channels): DevicesEntities\Channels\Channel {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -3870,7 +3990,9 @@ class Install extends Console\Command\Command
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3887,10 +4009,6 @@ class Install extends Console\Command\Command
 
 		if ($settable === true) {
 			$findChannelPropertiesQuery->settable(true);
-		}
-
-		if ($queryable === true) {
-			$findChannelPropertiesQuery->queryable(true);
 		}
 
 		$channelProperties = $this->channelsPropertiesRepository->findAllBy($findChannelPropertiesQuery);
@@ -3935,13 +4053,13 @@ class Install extends Console\Command\Command
 
 		$question = new Console\Question\ChoiceQuestion(
 			$this->translator->translate(
-				'//thermostat-device-addon.cmd.install.questions.select.mappedChannelProperty',
+				'//virtual-thermostat-addon.cmd.install.questions.select.mappedChannelProperty',
 			),
 			array_values($properties),
 			$default,
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
 			// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
@@ -3949,7 +4067,9 @@ class Install extends Console\Command\Command
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -3976,7 +4096,9 @@ class Install extends Console\Command\Command
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -3992,7 +4114,7 @@ class Install extends Console\Command\Command
 	}
 
 	/**
-	 * @throws BootstrapExceptions\InvalidState
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws Console\Exception\ExceptionInterface
 	 * @throws DBAL\Exception
 	 * @throws DevicesExceptions\InvalidState
@@ -4002,31 +4124,42 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\Runtime
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws ToolsExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askInstallAction(Style\SymfonyStyle $io): void
 	{
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.questions.whatToDo'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.questions.whatToDo'),
 			[
-				0 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.create.device'),
-				1 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.update.device'),
-				2 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.remove.device'),
-				3 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.manage.device'),
-				4 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.list.devices'),
-				5 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.nothing'),
+				0 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.create.device',
+				),
+				1 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.update.device',
+				),
+				2 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.remove.device',
+				),
+				3 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.manage.device',
+				),
+				4 => $this->translator->translate('//virtual-thermostat-addon.cmd.install.actions.list.devices'),
+				5 => $this->translator->translate('//virtual-thermostat-addon.cmd.install.actions.nothing'),
 			],
 			5,
 		);
 
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 
 		$whatToDo = $io->askQuestion($question);
 
 		if (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.create.device',
+				'//virtual-thermostat-addon.cmd.install.actions.create.device',
 			)
 			|| $whatToDo === '0'
 		) {
@@ -4036,7 +4169,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.update.device',
+				'//virtual-thermostat-addon.cmd.install.actions.update.device',
 			)
 			|| $whatToDo === '1'
 		) {
@@ -4046,7 +4179,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.remove.device',
+				'//virtual-thermostat-addon.cmd.install.actions.remove.device',
 			)
 			|| $whatToDo === '2'
 		) {
@@ -4056,7 +4189,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.manage.device',
+				'//virtual-thermostat-addon.cmd.install.actions.manage.device',
 			)
 			|| $whatToDo === '3'
 		) {
@@ -4066,7 +4199,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.list.devices',
+				'//virtual-thermostat-addon.cmd.install.actions.list.devices',
 			)
 			|| $whatToDo === '4'
 		) {
@@ -4086,38 +4219,64 @@ class Install extends Console\Command\Command
 	 * @throws Exceptions\Runtime
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws ToolsExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askManageDeviceAction(
 		Style\SymfonyStyle $io,
-		Entities\ThermostatDevice $device,
+		Entities\Devices\Device $device,
 	): void
 	{
+		$device = $this->devicesRepository->find($device->getId(), Entities\Devices\Device::class);
+		assert($device instanceof Entities\Devices\Device);
+
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.questions.whatToDo'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.questions.whatToDo'),
 			[
-				0 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.create.actor'),
-				1 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.update.actor'),
-				2 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.list.actors'),
-				3 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.remove.actor'),
-				4 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.create.sensor'),
-				5 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.update.sensor'),
-				6 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.list.sensors'),
-				7 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.remove.sensor'),
-				8 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.update.preset'),
-				9 => $this->translator->translate('//thermostat-device-addon.cmd.install.actions.nothing'),
+				0 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.create.actor',
+				),
+				1 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.update.actor',
+				),
+				2 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.list.actors',
+				),
+				3 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.remove.actor',
+				),
+				4 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.create.sensor',
+				),
+				5 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.update.sensor',
+				),
+				6 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.list.sensors',
+				),
+				7 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.remove.sensor',
+				),
+				8 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.update.preset',
+				),
+				9 => $this->translator->translate(
+					'//virtual-thermostat-addon.cmd.install.actions.nothing',
+				),
 			],
 			9,
 		);
 
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 
 		$whatToDo = $io->askQuestion($question);
 
 		if (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.create.actor',
+				'//virtual-thermostat-addon.cmd.install.actions.create.actor',
 			)
 			|| $whatToDo === '0'
 		) {
@@ -4127,7 +4286,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.update.actor',
+				'//virtual-thermostat-addon.cmd.install.actions.update.actor',
 			)
 			|| $whatToDo === '1'
 		) {
@@ -4137,7 +4296,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.list.actors',
+				'//virtual-thermostat-addon.cmd.install.actions.list.actors',
 			)
 			|| $whatToDo === '2'
 		) {
@@ -4147,7 +4306,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.remove.actor',
+				'//virtual-thermostat-addon.cmd.install.actions.remove.actor',
 			)
 			|| $whatToDo === '3'
 		) {
@@ -4157,7 +4316,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.create.sensor',
+				'//virtual-thermostat-addon.cmd.install.actions.create.sensor',
 			)
 			|| $whatToDo === '4'
 		) {
@@ -4167,7 +4326,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.update.sensor',
+				'//virtual-thermostat-addon.cmd.install.actions.update.sensor',
 			)
 			|| $whatToDo === '5'
 		) {
@@ -4177,7 +4336,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.list.sensors',
+				'//virtual-thermostat-addon.cmd.install.actions.list.sensors',
 			)
 			|| $whatToDo === '6'
 		) {
@@ -4187,7 +4346,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.remove.sensor',
+				'//virtual-thermostat-addon.cmd.install.actions.remove.sensor',
 			)
 			|| $whatToDo === '7'
 		) {
@@ -4197,7 +4356,7 @@ class Install extends Console\Command\Command
 
 		} elseif (
 			$whatToDo === $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.actions.update.preset',
+				'//virtual-thermostat-addon.cmd.install.actions.update.preset',
 			)
 			|| $whatToDo === '8'
 		) {
@@ -4210,7 +4369,7 @@ class Install extends Console\Command\Command
 	/**
 	 * @throws DevicesExceptions\InvalidState
 	 */
-	private function askWhichConnector(Style\SymfonyStyle $io): VirtualEntities\VirtualConnector|null
+	private function askWhichConnector(Style\SymfonyStyle $io): VirtualEntities\Connectors\Connector|null
 	{
 		$connectors = [];
 
@@ -4218,11 +4377,11 @@ class Install extends Console\Command\Command
 
 		$systemConnectors = $this->connectorsRepository->findAllBy(
 			$findConnectorsQuery,
-			VirtualEntities\VirtualConnector::class,
+			VirtualEntities\Connectors\Connector::class,
 		);
 		usort(
 			$systemConnectors,
-			static fn (VirtualEntities\VirtualConnector $a, VirtualEntities\VirtualConnector $b): int => (
+			static fn (VirtualEntities\Connectors\Connector $a, VirtualEntities\Connectors\Connector $b): int => (
 				($a->getName() ?? $a->getIdentifier()) <=> ($b->getName() ?? $b->getIdentifier())
 			),
 		);
@@ -4236,20 +4395,24 @@ class Install extends Console\Command\Command
 		}
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.item.connector'),
+			$this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.questions.select.item.connector',
+			),
 			array_values($connectors),
 			count($connectors) === 1 ? 0 : null,
 		);
 
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
-			function (string|int|null $answer) use ($connectors): VirtualEntities\VirtualConnector {
+			function (string|int|null $answer) use ($connectors): VirtualEntities\Connectors\Connector {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -4267,7 +4430,7 @@ class Install extends Console\Command\Command
 
 					$connector = $this->connectorsRepository->findOneBy(
 						$findConnectorQuery,
-						VirtualEntities\VirtualConnector::class,
+						VirtualEntities\Connectors\Connector::class,
 					);
 
 					if ($connector !== null) {
@@ -4277,7 +4440,9 @@ class Install extends Console\Command\Command
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -4285,7 +4450,7 @@ class Install extends Console\Command\Command
 		);
 
 		$connector = $io->askQuestion($question);
-		assert($connector instanceof VirtualEntities\VirtualConnector);
+		assert($connector instanceof VirtualEntities\Connectors\Connector);
 
 		return $connector;
 	}
@@ -4295,7 +4460,7 @@ class Install extends Console\Command\Command
 	 */
 	private function askWhichDevice(
 		Style\SymfonyStyle $io,
-	): Entities\ThermostatDevice|null
+	): Entities\Devices\Device|null
 	{
 		$devices = [];
 
@@ -4303,11 +4468,11 @@ class Install extends Console\Command\Command
 
 		$connectorDevices = $this->devicesRepository->findAllBy(
 			$findDevicesQuery,
-			Entities\ThermostatDevice::class,
+			Entities\Devices\Device::class,
 		);
 		usort(
 			$connectorDevices,
-			static fn (Entities\ThermostatDevice $a, Entities\ThermostatDevice $b): int => (
+			static fn (Entities\Devices\Device $a, Entities\Devices\Device $b): int => (
 				($a->getName() ?? $a->getIdentifier()) <=> ($b->getName() ?? $b->getIdentifier())
 			),
 		);
@@ -4321,20 +4486,22 @@ class Install extends Console\Command\Command
 		}
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.item.device'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.install.questions.select.item.device'),
 			array_values($devices),
 			count($devices) === 1 ? 0 : null,
 		);
 
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
-			function (string|int|null $answer) use ($devices): Entities\ThermostatDevice {
+			function (string|int|null $answer) use ($devices): Entities\Devices\Device {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -4352,7 +4519,7 @@ class Install extends Console\Command\Command
 
 					$device = $this->devicesRepository->findOneBy(
 						$findDeviceQuery,
-						Entities\ThermostatDevice::class,
+						Entities\Devices\Device::class,
 					);
 
 					if ($device !== null) {
@@ -4362,7 +4529,9 @@ class Install extends Console\Command\Command
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -4370,17 +4539,20 @@ class Install extends Console\Command\Command
 		);
 
 		$device = $io->askQuestion($question);
-		assert($device instanceof Entities\ThermostatDevice);
+		assert($device instanceof Entities\Devices\Device);
 
 		return $device;
 	}
 
 	/**
+	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	private function askWhichPreset(
 		Style\SymfonyStyle $io,
-		Entities\ThermostatDevice $device,
+		Entities\Devices\Device $device,
 	): Types\Preset|null
 	{
 		$allowedValues = $device->getPresetModes();
@@ -4391,16 +4563,16 @@ class Install extends Console\Command\Command
 
 		$presets = [];
 
-		foreach (Types\Preset::getAvailableValues() as $preset) {
+		foreach (Types\Preset::cases() as $preset) {
 			if (
 				!in_array($preset, $allowedValues, true)
-				|| in_array($preset, [Types\Preset::MANUAL, Types\Preset::AUTO], true)
+				|| $preset === Types\Preset::AUTO
 			) {
 				continue;
 			}
 
-			$presets[$preset] = $this->translator->translate(
-				'//thermostat-device-addon.cmd.install.answers.preset.' . $preset,
+			$presets[$preset->value] = $this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.answers.preset.' . $preset->value,
 			);
 		}
 
@@ -4409,19 +4581,23 @@ class Install extends Console\Command\Command
 		}
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.presetToUpdate'),
+			$this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.questions.select.presetToUpdate',
+			),
 			array_values($presets),
 			count($presets) === 1 ? 0 : null,
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
 			function (string|int|null $answer) use ($presets): Types\Preset {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -4433,13 +4609,15 @@ class Install extends Console\Command\Command
 
 				$preset = array_search($answer, $presets, true);
 
-				if ($preset !== false && Types\Preset::isValidValue($preset)) {
-					return Types\Preset::get($preset);
+				if ($preset !== false) {
+					return Types\Preset::from($preset);
 				}
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -4453,11 +4631,12 @@ class Install extends Console\Command\Command
 	}
 
 	/**
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidState
 	 */
 	private function askWhichActor(
 		Style\SymfonyStyle $io,
-		Entities\ThermostatDevice $device,
+		Entities\Devices\Device $device,
 	): DevicesEntities\Channels\Properties\Mapped|null
 	{
 		$actors = [];
@@ -4489,12 +4668,12 @@ class Install extends Console\Command\Command
 			$actors[$channelActor->getIdentifier()] = sprintf(
 				'%s [%s: %s, %s: %s, %s: %s]',
 				($channelActor->getName() ?? $channelActor->getIdentifier()),
-				$this->translator->translate('//thermostat-device-addon.cmd.install.answers.device'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.answers.device'),
 				// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
 				($channelActor->getParent()->getChannel()->getDevice()->getName() ?? $channelActor->getParent()->getChannel()->getDevice()->getIdentifier()),
-				$this->translator->translate('//thermostat-device-addon.cmd.install.answers.channel'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.answers.channel'),
 				($channelActor->getParent()->getChannel()->getName() ?? $channelActor->getParent()->getChannel()->getIdentifier()),
-				$this->translator->translate('//thermostat-device-addon.cmd.install.answers.property'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.answers.property'),
 				($channelActor->getParent()->getName() ?? $channelActor->getParent()->getIdentifier()),
 			);
 		}
@@ -4504,19 +4683,23 @@ class Install extends Console\Command\Command
 		}
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.actorToUpdate'),
+			$this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.questions.select.actorToUpdate',
+			),
 			array_values($actors),
 			count($actors) === 1 ? 0 : null,
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
 			function (string|int|null $answer) use ($channel, $actors): DevicesEntities\Channels\Properties\Mapped {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -4545,7 +4728,9 @@ class Install extends Console\Command\Command
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -4559,11 +4744,12 @@ class Install extends Console\Command\Command
 	}
 
 	/**
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidState
 	 */
 	private function askWhichSensor(
 		Style\SymfonyStyle $io,
-		Entities\ThermostatDevice $device,
+		Entities\Devices\Device $device,
 	): DevicesEntities\Channels\Properties\Mapped|null
 	{
 		$sensors = [];
@@ -4595,12 +4781,12 @@ class Install extends Console\Command\Command
 			$sensors[$channelSensor->getIdentifier()] = sprintf(
 				'%s [%s: %s, %s: %s, %s: %s]',
 				($channelSensor->getName() ?? $channelSensor->getIdentifier()),
-				$this->translator->translate('//thermostat-device-addon.cmd.install.answers.device'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.answers.device'),
 				// phpcs:ignore SlevomatCodingStandard.Files.LineLength.LineTooLong
 				($channelSensor->getParent()->getChannel()->getDevice()->getName() ?? $channelSensor->getParent()->getChannel()->getDevice()->getIdentifier()),
-				$this->translator->translate('//thermostat-device-addon.cmd.install.answers.channel'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.answers.channel'),
 				($channelSensor->getParent()->getChannel()->getName() ?? $channelSensor->getParent()->getChannel()->getIdentifier()),
-				$this->translator->translate('//thermostat-device-addon.cmd.install.answers.property'),
+				$this->translator->translate('//virtual-thermostat-addon.cmd.install.answers.property'),
 				($channelSensor->getParent()->getName() ?? $channelSensor->getParent()->getIdentifier()),
 			);
 		}
@@ -4610,19 +4796,23 @@ class Install extends Console\Command\Command
 		}
 
 		$question = new Console\Question\ChoiceQuestion(
-			$this->translator->translate('//thermostat-device-addon.cmd.install.questions.select.sensorToUpdate'),
+			$this->translator->translate(
+				'//virtual-thermostat-addon.cmd.install.questions.select.sensorToUpdate',
+			),
 			array_values($sensors),
 			count($sensors) === 1 ? 0 : null,
 		);
 		$question->setErrorMessage(
-			$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+			$this->translator->translate('//virtual-thermostat-addon.cmd.base.messages.answerNotValid'),
 		);
 		$question->setValidator(
 			function (string|int|null $answer) use ($channel, $sensors): DevicesEntities\Channels\Properties\Mapped {
 				if ($answer === null) {
 					throw new Exceptions\Runtime(
 						sprintf(
-							$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+							$this->translator->translate(
+								'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+							),
 							$answer,
 						),
 					);
@@ -4651,7 +4841,9 @@ class Install extends Console\Command\Command
 
 				throw new Exceptions\Runtime(
 					sprintf(
-						$this->translator->translate('//thermostat-device-addon.cmd.base.messages.answerNotValid'),
+						$this->translator->translate(
+							'//virtual-thermostat-addon.cmd.base.messages.answerNotValid',
+						),
 						$answer,
 					),
 				);
@@ -4695,12 +4887,16 @@ class Install extends Console\Command\Command
 	}
 
 	/**
+	 * @throws ApplicationExceptions\InvalidState
 	 * @throws DevicesExceptions\InvalidState
 	 * @throws Exceptions\InvalidState
 	 */
-	private function findChannelPropertyIdentifier(DevicesEntities\Channels\Channel $channel, string $prefix): string
+	private function findChannelPropertyIdentifier(
+		DevicesEntities\Channels\Channel $channel,
+		Types\ChannelPropertyIdentifier $prefix,
+	): string
 	{
-		$identifierPattern = $prefix . '_%d';
+		$identifierPattern = $prefix->value . '_%d';
 
 		for ($i = 1; $i <= 100; $i++) {
 			$identifier = sprintf($identifierPattern, $i);
@@ -4715,20 +4911,6 @@ class Install extends Console\Command\Command
 		}
 
 		throw new Exceptions\InvalidState('Channel property identifier could not be created');
-	}
-
-	/**
-	 * @throws Exceptions\Runtime
-	 */
-	protected function getOrmConnection(): DBAL\Connection
-	{
-		$connection = $this->managerRegistry->getConnection();
-
-		if ($connection instanceof DBAL\Connection) {
-			return $connection;
-		}
-
-		throw new Exceptions\Runtime('Database connection could not be established');
 	}
 
 }

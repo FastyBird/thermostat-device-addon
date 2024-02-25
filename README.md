@@ -4,14 +4,14 @@
 
 # FastyBird IoT Thermostat Device addon
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/FastyBird/thermostat-device-addon/ci.yaml?style=flat-square)](https://github.com/FastyBird/thermostat-device-addon/actions)
-[![Licence](https://img.shields.io/github/license/FastyBird/thermostat-device-addon?style=flat-square)](https://github.com/FastyBird/thermostat-device-addon/blob/main/LICENSE.md)
-[![Code coverage](https://img.shields.io/coverallsCoverage/github/FastyBird/thermostat-device-addon?style=flat-square)](https://coveralls.io/r/FastyBird/thermostat-device-addon)
-[![Mutation testing](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fbadge-api.stryker-mutator.io%2Fgithub.com%2FFastyBird%2Fthermostat-device-addon%2Fmain)](https://dashboard.stryker-mutator.io/reports/github.com/FastyBird/thermostat-device-addon/main)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/FastyBird/virtual-thermostat-addon/ci.yaml?style=flat-square)](https://github.com/FastyBird/virtual-thermostat-addon/actions)
+[![Licence](https://img.shields.io/github/license/FastyBird/virtual-thermostat-addon?style=flat-square)](https://github.com/FastyBird/virtual-thermostat-addon/blob/main/LICENSE.md)
+[![Code coverage](https://img.shields.io/coverallsCoverage/github/FastyBird/virtual-thermostat-addon?style=flat-square)](https://coveralls.io/r/FastyBird/virtual-thermostat-addon)
+[![Mutation testing](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fbadge-api.stryker-mutator.io%2Fgithub.com%2FFastyBird%2Fvirtual-thermostat-addon%2Fmain)](https://dashboard.stryker-mutator.io/reports/github.com/FastyBird/virtual-thermostat-addon/main)
 
-![PHP](https://badgen.net/packagist/php/FastyBird/thermostat-device-addon?cache=300&style=flat-square)
-[![Latest stable](https://badgen.net/packagist/v/FastyBird/thermostat-device-addon/latest?cache=300&style=flat-square)](https://packagist.org/packages/FastyBird/thermostat-device-addon)
-[![Downloads total](https://badgen.net/packagist/dt/FastyBird/thermostat-device-addon?cache=300&style=flat-square)](https://packagist.org/packages/FastyBird/thermostat-device-addon)
+![PHP](https://badgen.net/packagist/php/FastyBird/virtual-thermostat-addon?cache=300&style=flat-square)
+[![Latest stable](https://badgen.net/packagist/v/FastyBird/virtual-thermostat-addon/latest?cache=300&style=flat-square)](https://packagist.org/packages/FastyBird/virtual-thermostat-addon)
+[![Downloads total](https://badgen.net/packagist/dt/FastyBird/virtual-thermostat-addon?cache=300&style=flat-square)](https://packagist.org/packages/FastyBird/virtual-thermostat-addon)
 [![PHPStan](https://img.shields.io/badge/PHPStan-enabled-brightgreen.svg?style=flat-square)](https://github.com/phpstan/phpstan)
 
 ***
@@ -36,7 +36,7 @@ and is licensed under [Apache2](http://www.apache.org/licenses/LICENSE-2.0).
 
 ## Requirements
 
-FastyBird Thermostat Device Addon is tested against PHP 8.1 and require installed [Process Control](https://www.php.net/manual/en/book.pcntl.php)
+FastyBird Thermostat Device Addon is tested against PHP 8.2 and require installed [Process Control](https://www.php.net/manual/en/book.pcntl.php)
 PHP extensions.
 
 ## Installation
@@ -45,13 +45,13 @@ This extension is part of the [FastyBird](https://www.fastybird.com) [IoT](https
 In case you want to create you own distribution of [FastyBird](https://www.fastybird.com) [IoT](https://en.wikipedia.org/wiki/Internet_of_things) ecosystem you could install this extension with  [Composer](http://getcomposer.org/):
 
 ```sh
-composer require fastybird/thermostat-device-addon
+composer require fastybird/virtual-thermostat-addon
 ```
 
 ## Documentation
 
 :book: Learn how to configure FastyBird thermostat devices and manage them with [FastyBird](https://www.fastybird.com) [IoT](https://en.wikipedia.org/wiki/Internet_of_things) system
-in [documentation](https://github.com/FastyBird/thermostat-device-addon/wiki).
+in [documentation](https://github.com/FastyBird/virtual-thermostat-addon/wiki).
 
 # FastyBird
 
@@ -99,4 +99,4 @@ For release info check [release page](https://github.com/FastyBird/fastybird/rel
 
 ***
 Homepage [https://www.fastybird.com](https://www.fastybird.com) and
-repository [https://github.com/fastybird/thermostat-device-addon](https://github.com/fastybird/thermostat-device-addon).
+repository [https://github.com/fastybird/virtual-thermostat-addon](https://github.com/fastybird/virtual-thermostat-addon).

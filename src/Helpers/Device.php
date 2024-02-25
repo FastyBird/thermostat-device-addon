@@ -6,25 +6,29 @@
  * @license        More in LICENSE.md
  * @copyright      https://www.fastybird.com
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Helpers
  * @since          1.0.0
  *
  * @date           21.11.23
  */
 
-namespace FastyBird\Addon\ThermostatDevice\Helpers;
+namespace FastyBird\Addon\VirtualThermostat\Helpers;
 
-use FastyBird\Addon\ThermostatDevice\Entities;
-use FastyBird\Addon\ThermostatDevice\Exceptions;
-use FastyBird\Addon\ThermostatDevice\Types;
-use FastyBird\Library\Metadata\Documents as MetadataDocuments;
+use FastyBird\Addon\VirtualThermostat\Documents;
+use FastyBird\Addon\VirtualThermostat\Entities;
+use FastyBird\Addon\VirtualThermostat\Exceptions;
+use FastyBird\Addon\VirtualThermostat\Queries;
+use FastyBird\Addon\VirtualThermostat\Types;
 use FastyBird\Library\Metadata\Exceptions as MetadataExceptions;
-use FastyBird\Library\Metadata\ValueObjects as MetadataValueObjects;
+use FastyBird\Library\Metadata\Formats as MetadataFormats;
+use FastyBird\Module\Devices\Documents as DevicesDocuments;
 use FastyBird\Module\Devices\Exceptions as DevicesExceptions;
 use FastyBird\Module\Devices\Models as DevicesModels;
 use FastyBird\Module\Devices\Queries as DevicesQueries;
 use Nette\Utils;
+use TypeError;
+use ValueError;
 use function array_filter;
 use function array_map;
 use function assert;
@@ -35,35 +39,38 @@ use function sprintf;
 /**
  * Thermostat helper
  *
- * @package        FastyBird:ThermostatDeviceAddon!
+ * @package        FastyBird:VirtualThermostatAddon!
  * @subpackage     Helpers
  *
  * @author         Adam Kadlec <adam.kadlec@fastybird.com>
  */
-final class Device
+final readonly class Device
 {
 
 	public function __construct(
-		private readonly DevicesModels\Configuration\Channels\Repository $channelsConfigurationRepository,
-		private readonly DevicesModels\Configuration\Channels\Properties\Repository $channelsPropertiesConfigurationRepository,
+		private DevicesModels\Configuration\Channels\Repository $channelsConfigurationRepository,
+		private DevicesModels\Configuration\Channels\Properties\Repository $channelsPropertiesConfigurationRepository,
 	)
 	{
 	}
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 */
 	public function getConfiguration(
-		MetadataDocuments\DevicesModule\Device $device,
-	): MetadataDocuments\DevicesModule\Channel
+		DevicesDocuments\Devices\Device $device,
+	): DevicesDocuments\Channels\Channel
 	{
-		$findChannelQuery = new DevicesQueries\Configuration\FindChannels();
+		$findChannelQuery = new Queries\Configuration\FindConfigurationChannels();
 		$findChannelQuery->forDevice($device);
 		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::CONFIGURATION);
-		$findChannelQuery->byType(Entities\Channels\Configuration::TYPE);
 
-		$channel = $this->channelsConfigurationRepository->findOneBy($findChannelQuery);
+		$channel = $this->channelsConfigurationRepository->findOneBy(
+			$findChannelQuery,
+			Documents\Channels\Configuration::class,
+		);
 
 		if ($channel === null) {
 			throw new Exceptions\InvalidState('Configuration channel is not configured');
@@ -74,22 +81,22 @@ final class Device
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 */
-	public function getPreset(
-		MetadataDocuments\DevicesModule\Device $device,
-		string $preset,
-	): MetadataDocuments\DevicesModule\Channel
+	public function getState(DevicesDocuments\Devices\Device $device): DevicesDocuments\Channels\Channel
 	{
-		$findChannelQuery = new DevicesQueries\Configuration\FindChannels();
+		$findChannelQuery = new Queries\Configuration\FindStateChannels();
 		$findChannelQuery->forDevice($device);
-		$findChannelQuery->byIdentifier($preset);
-		$findChannelQuery->byType(Entities\Channels\Preset::TYPE);
+		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::STATE);
 
-		$channel = $this->channelsConfigurationRepository->findOneBy($findChannelQuery);
+		$channel = $this->channelsConfigurationRepository->findOneBy(
+			$findChannelQuery,
+			Documents\Channels\State::class,
+		);
 
 		if ($channel === null) {
-			throw new Exceptions\InvalidState(sprintf('Preset channel: %s is not configured', $preset));
+			throw new Exceptions\InvalidState('State channel is not configured');
 		}
 
 		return $channel;
@@ -97,121 +104,157 @@ final class Device
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
+	 * @throws Exceptions\InvalidState
+	 */
+	public function getPreset(
+		DevicesDocuments\Devices\Device $device,
+		Types\ChannelIdentifier $preset,
+	): DevicesDocuments\Channels\Channel
+	{
+		$findChannelQuery = new Queries\Configuration\FindPresetChannels();
+		$findChannelQuery->forDevice($device);
+		$findChannelQuery->byIdentifier($preset);
+
+		$channel = $this->channelsConfigurationRepository->findOneBy(
+			$findChannelQuery,
+			Documents\Channels\Preset::class,
+		);
+
+		if ($channel === null) {
+			throw new Exceptions\InvalidState(sprintf('Preset channel: %s is not configured', $preset->value));
+		}
+
+		return $channel;
+	}
+
+	/**
+	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 */
 	public function getHvacMode(
-		MetadataDocuments\DevicesModule\Device $device,
-	): MetadataDocuments\DevicesModule\ChannelDynamicProperty|null
+		DevicesDocuments\Devices\Device $device,
+	): DevicesDocuments\Channels\Properties\Dynamic|null
 	{
-		$channel = $this->getConfiguration($device);
+		$channel = $this->getState($device);
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelDynamicProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HVAC_MODE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HVAC_MODE->value);
 
 		return $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
 	}
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 */
 	public function getPresetMode(
-		MetadataDocuments\DevicesModule\Device $device,
-	): MetadataDocuments\DevicesModule\ChannelDynamicProperty|null
+		DevicesDocuments\Devices\Device $device,
+	): DevicesDocuments\Channels\Properties\Dynamic|null
 	{
-		$channel = $this->getConfiguration($device);
+		$channel = $this->getState($device);
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelDynamicProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::PRESET_MODE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::PRESET_MODE->value);
 
 		return $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
 	}
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 */
 	public function getTargetTemp(
-		MetadataDocuments\DevicesModule\Device $device,
+		DevicesDocuments\Devices\Device $device,
 		Types\Preset $preset,
-	): MetadataDocuments\DevicesModule\ChannelDynamicProperty|null
+	): DevicesDocuments\Channels\Properties\Dynamic|null
 	{
-		if ($preset->equalsValue(Types\Preset::AUTO)) {
+		if ($preset === Types\Preset::AUTO) {
 			return null;
 		}
 
-		if ($preset->equalsValue(Types\Preset::AWAY)) {
+		if ($preset === Types\Preset::MANUAL) {
+			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_MANUAL);
+		} elseif ($preset === Types\Preset::AWAY) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_AWAY);
-		} elseif ($preset->equalsValue(Types\Preset::ECO)) {
+		} elseif ($preset === Types\Preset::ECO) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_ECO);
-		} elseif ($preset->equalsValue(Types\Preset::HOME)) {
+		} elseif ($preset === Types\Preset::HOME) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_HOME);
-		} elseif ($preset->equalsValue(Types\Preset::COMFORT)) {
+		} elseif ($preset === Types\Preset::COMFORT) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_COMFORT);
-		} elseif ($preset->equalsValue(Types\Preset::SLEEP)) {
+		} elseif ($preset === Types\Preset::SLEEP) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_SLEEP);
-		} elseif ($preset->equalsValue(Types\Preset::ANTI_FREEZE)) {
+		} elseif ($preset === Types\Preset::ANTI_FREEZE) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_ANTI_FREEZE);
-		} elseif ($preset->equalsValue(Types\Preset::MANUAL)) {
-			$channel = $this->getConfiguration($device);
 		} else {
 			throw new Exceptions\InvalidState('Provided preset is not configured');
 		}
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelDynamicProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::TARGET_TEMPERATURE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::TARGET_ROOM_TEMPERATURE->value);
 
 		return $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelDynamicProperty::class,
+			DevicesDocuments\Channels\Properties\Dynamic::class,
 		);
 	}
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	public function getCoolingThresholdTemp(
-		MetadataDocuments\DevicesModule\Device $device,
+		DevicesDocuments\Devices\Device $device,
 		Types\Preset $preset,
 	): float|null
 	{
-		if ($preset->equalsValue(Types\Preset::AWAY)) {
+		if ($preset === Types\Preset::AUTO) {
+			return null;
+		}
+
+		if ($preset === Types\Preset::MANUAL) {
+			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_MANUAL);
+		} elseif ($preset === Types\Preset::AWAY) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_AWAY);
-		} elseif ($preset->equalsValue(Types\Preset::ECO)) {
+		} elseif ($preset === Types\Preset::ECO) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_ECO);
-		} elseif ($preset->equalsValue(Types\Preset::HOME)) {
+		} elseif ($preset === Types\Preset::HOME) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_HOME);
-		} elseif ($preset->equalsValue(Types\Preset::COMFORT)) {
+		} elseif ($preset === Types\Preset::COMFORT) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_COMFORT);
-		} elseif ($preset->equalsValue(Types\Preset::SLEEP)) {
+		} elseif ($preset === Types\Preset::SLEEP) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_SLEEP);
-		} elseif ($preset->equalsValue(Types\Preset::ANTI_FREEZE)) {
+		} elseif ($preset === Types\Preset::ANTI_FREEZE) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_ANTI_FREEZE);
-		} elseif ($preset->equalsValue(Types\Preset::MANUAL)) {
-			$channel = $this->getConfiguration($device);
 		} else {
 			throw new Exceptions\InvalidState('Provided preset is not configured');
 		}
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelVariableProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::COOLING_THRESHOLD_TEMPERATURE->value);
 
 		$property = $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelVariableProperty::class,
+			DevicesDocuments\Channels\Properties\Variable::class,
 		);
 
 		if ($property?->getValue() === null) {
@@ -226,40 +269,47 @@ final class Device
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
 	public function getHeatingThresholdTemp(
-		MetadataDocuments\DevicesModule\Device $device,
+		DevicesDocuments\Devices\Device $device,
 		Types\Preset $preset,
 	): float|null
 	{
-		if ($preset->equalsValue(Types\Preset::AWAY)) {
+		if ($preset === Types\Preset::AUTO) {
+			return null;
+		}
+
+		if ($preset === Types\Preset::MANUAL) {
+			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_MANUAL);
+		} elseif ($preset === Types\Preset::AWAY) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_AWAY);
-		} elseif ($preset->equalsValue(Types\Preset::ECO)) {
+		} elseif ($preset === Types\Preset::ECO) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_ECO);
-		} elseif ($preset->equalsValue(Types\Preset::HOME)) {
+		} elseif ($preset === Types\Preset::HOME) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_HOME);
-		} elseif ($preset->equalsValue(Types\Preset::COMFORT)) {
+		} elseif ($preset === Types\Preset::COMFORT) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_COMFORT);
-		} elseif ($preset->equalsValue(Types\Preset::SLEEP)) {
+		} elseif ($preset === Types\Preset::SLEEP) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_SLEEP);
-		} elseif ($preset->equalsValue(Types\Preset::ANTI_FREEZE)) {
+		} elseif ($preset === Types\Preset::ANTI_FREEZE) {
 			$channel = $this->getPreset($device, Types\ChannelIdentifier::PRESET_ANTI_FREEZE);
-		} elseif ($preset->equalsValue(Types\Preset::MANUAL)) {
-			$channel = $this->getConfiguration($device);
 		} else {
 			throw new Exceptions\InvalidState('Provided preset is not configured');
 		}
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelVariableProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HEATING_THRESHOLD_TEMPERATURE->value);
 
 		$property = $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelVariableProperty::class,
+			DevicesDocuments\Channels\Properties\Variable::class,
 		);
 
 		if ($property?->getValue() === null) {
@@ -274,25 +324,28 @@ final class Device
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	public function getMaximumFloorTemp(MetadataDocuments\DevicesModule\Device $device): float
+	public function getMaximumFloorTemp(DevicesDocuments\Devices\Device $device): float
 	{
 		$channel = $this->getConfiguration($device);
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelVariableProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::MAXIMUM_FLOOR_TEMPERATURE->value);
 
 		$property = $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelVariableProperty::class,
+			DevicesDocuments\Channels\Properties\Variable::class,
 		);
 
 		if ($property?->getValue() === null) {
-			return Entities\ThermostatDevice::MAXIMUM_FLOOR_TEMPERATURE;
+			return Entities\Devices\Device::MAXIMUM_FLOOR_TEMPERATURE;
 		}
 
 		$value = $property->getValue();
@@ -303,21 +356,24 @@ final class Device
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	public function getMinimumCycleDuration(MetadataDocuments\DevicesModule\Device $device): float|null
+	public function getMinimumCycleDuration(DevicesDocuments\Devices\Device $device): float|null
 	{
 		$channel = $this->getConfiguration($device);
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelVariableProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::MINIMUM_CYCLE_DURATION);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::MINIMUM_CYCLE_DURATION->value);
 
 		$property = $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelVariableProperty::class,
+			DevicesDocuments\Channels\Properties\Variable::class,
 		);
 
 		if ($property?->getValue() === null) {
@@ -335,21 +391,24 @@ final class Device
 	 * For example, if the target temperature is 25 and the tolerance is 0.5 the heater will start when the sensor equals or goes below 24.5
 	 *
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	public function getLowTargetTempTolerance(MetadataDocuments\DevicesModule\Device $device): float|null
+	public function getLowTargetTempTolerance(DevicesDocuments\Devices\Device $device): float|null
 	{
 		$channel = $this->getConfiguration($device);
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelVariableProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::LOW_TARGET_TEMPERATURE_TOLERANCE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::LOW_TARGET_TEMPERATURE_TOLERANCE->value);
 
 		$property = $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelVariableProperty::class,
+			DevicesDocuments\Channels\Properties\Variable::class,
 		);
 
 		if ($property?->getValue() === null) {
@@ -367,21 +426,24 @@ final class Device
 	 * For example, if the target temperature is 25 and the tolerance is 0.5 the heater will stop when the sensor equals or goes above 25.5
 	 *
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
 	 * @throws MetadataExceptions\InvalidState
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	public function getHighTargetTempTolerance(MetadataDocuments\DevicesModule\Device $device): float|null
+	public function getHighTargetTempTolerance(DevicesDocuments\Devices\Device $device): float|null
 	{
 		$channel = $this->getConfiguration($device);
 
 		$findPropertyQuery = new DevicesQueries\Configuration\FindChannelVariableProperties();
 		$findPropertyQuery->forChannel($channel);
-		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HIGH_TARGET_TEMPERATURE_TOLERANCE);
+		$findPropertyQuery->byIdentifier(Types\ChannelPropertyIdentifier::HIGH_TARGET_TEMPERATURE_TOLERANCE->value);
 
 		$property = $this->channelsPropertiesConfigurationRepository->findOneBy(
 			$findPropertyQuery,
-			MetadataDocuments\DevicesModule\ChannelVariableProperty::class,
+			DevicesDocuments\Channels\Properties\Variable::class,
 		);
 
 		if ($property?->getValue() === null) {
@@ -395,85 +457,21 @@ final class Device
 	}
 
 	/**
-	 * @return array<int, MetadataDocuments\DevicesModule\ChannelDynamicProperty|MetadataDocuments\DevicesModule\ChannelMappedProperty>
+	 * @return array<int, DevicesDocuments\Channels\Properties\Dynamic|DevicesDocuments\Channels\Properties\Mapped>
 	 *
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 */
-	public function getActors(MetadataDocuments\DevicesModule\Device $device): array
+	public function getActors(DevicesDocuments\Devices\Device $device): array
 	{
-		$findChannelQuery = new DevicesQueries\Configuration\FindChannels();
+		$findChannelQuery = new Queries\Configuration\FindActorChannels();
 		$findChannelQuery->forDevice($device);
 		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::ACTORS);
-		$findChannelQuery->byType(Entities\Channels\Actors::TYPE);
 
-		$channel = $this->channelsConfigurationRepository->findOneBy($findChannelQuery);
-
-		if ($channel === null) {
-			return [];
-		}
-
-		$findChannelPropertiesQuery = new DevicesQueries\Configuration\FindChannelProperties();
-		$findChannelPropertiesQuery->forChannel($channel);
-
-		$properties = $this->channelsPropertiesConfigurationRepository->findAllBy($findChannelPropertiesQuery);
-
-		return array_filter(
-			$properties,
-			static fn (MetadataDocuments\DevicesModule\ChannelProperty $property): bool =>
-				(
-					$property instanceof MetadataDocuments\DevicesModule\ChannelDynamicProperty
-					|| $property instanceof MetadataDocuments\DevicesModule\ChannelMappedProperty
-				) && (
-					Utils\Strings::startsWith($property->getIdentifier(), Types\ChannelPropertyIdentifier::HEATER_ACTOR)
-					|| Utils\Strings::startsWith(
-						$property->getIdentifier(),
-						Types\ChannelPropertyIdentifier::COOLER_ACTOR,
-					)
-				),
+		$channel = $this->channelsConfigurationRepository->findOneBy(
+			$findChannelQuery,
+			Documents\Channels\Actors::class,
 		);
-	}
-
-	/**
-	 * @throws DevicesExceptions\InvalidState
-	 */
-	public function hasHeaters(MetadataDocuments\DevicesModule\Device $device): bool
-	{
-		return array_filter(
-			$this->getActors($device),
-			static fn ($actor): bool => Utils\Strings::startsWith(
-				$actor->getIdentifier(),
-				Types\ChannelPropertyIdentifier::HEATER_ACTOR,
-			)
-		) !== [];
-	}
-
-	/**
-	 * @throws DevicesExceptions\InvalidState
-	 */
-	public function hasCoolers(MetadataDocuments\DevicesModule\Device $device): bool
-	{
-		return array_filter(
-			$this->getActors($device),
-			static fn ($actor): bool => Utils\Strings::startsWith(
-				$actor->getIdentifier(),
-				Types\ChannelPropertyIdentifier::COOLER_ACTOR,
-			)
-		) !== [];
-	}
-
-	/**
-	 * @return array<int, MetadataDocuments\DevicesModule\ChannelDynamicProperty|MetadataDocuments\DevicesModule\ChannelMappedProperty>
-	 *
-	 * @throws DevicesExceptions\InvalidState
-	 */
-	public function getSensors(MetadataDocuments\DevicesModule\Device $device): array
-	{
-		$findChannelQuery = new DevicesQueries\Configuration\FindChannels();
-		$findChannelQuery->forDevice($device);
-		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::SENSORS);
-		$findChannelQuery->byType(Entities\Channels\Sensors::TYPE);
-
-		$channel = $this->channelsConfigurationRepository->findOneBy($findChannelQuery);
 
 		if ($channel === null) {
 			return [];
@@ -486,18 +484,18 @@ final class Device
 
 		return array_filter(
 			$properties,
-			static fn (MetadataDocuments\DevicesModule\ChannelProperty $property): bool =>
+			static fn (DevicesDocuments\Channels\Properties\Property $property): bool =>
 				(
-					$property instanceof MetadataDocuments\DevicesModule\ChannelDynamicProperty
-					|| $property instanceof MetadataDocuments\DevicesModule\ChannelMappedProperty
+					$property instanceof DevicesDocuments\Channels\Properties\Dynamic
+					|| $property instanceof DevicesDocuments\Channels\Properties\Mapped
 				) && (
 					Utils\Strings::startsWith(
 						$property->getIdentifier(),
-						Types\ChannelPropertyIdentifier::TARGET_SENSOR,
+						Types\ChannelPropertyIdentifier::HEATER_ACTOR->value,
 					)
 					|| Utils\Strings::startsWith(
 						$property->getIdentifier(),
-						Types\ChannelPropertyIdentifier::FLOOR_SENSOR,
+						Types\ChannelPropertyIdentifier::COOLER_ACTOR->value,
 					)
 				),
 		);
@@ -505,45 +503,50 @@ final class Device
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 */
-	public function hasSensors(MetadataDocuments\DevicesModule\Device $device): bool
+	public function hasHeaters(DevicesDocuments\Devices\Device $device): bool
 	{
 		return array_filter(
-			$this->getSensors($device),
-			static fn ($sensor): bool => Utils\Strings::startsWith(
-				$sensor->getIdentifier(),
-				Types\ChannelPropertyIdentifier::TARGET_SENSOR,
+			$this->getActors($device),
+			static fn ($actor): bool => Utils\Strings::startsWith(
+				$actor->getIdentifier(),
+				Types\ChannelPropertyIdentifier::HEATER_ACTOR->value,
 			)
 		) !== [];
 	}
 
 	/**
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 */
-	public function hasFloorSensors(MetadataDocuments\DevicesModule\Device $device): bool
+	public function hasCoolers(DevicesDocuments\Devices\Device $device): bool
 	{
 		return array_filter(
-			$this->getSensors($device),
-			static fn ($sensor): bool => Utils\Strings::startsWith(
-				$sensor->getIdentifier(),
-				Types\ChannelPropertyIdentifier::FLOOR_SENSOR,
+			$this->getActors($device),
+			static fn ($actor): bool => Utils\Strings::startsWith(
+				$actor->getIdentifier(),
+				Types\ChannelPropertyIdentifier::COOLER_ACTOR->value,
 			)
 		) !== [];
 	}
 
 	/**
-	 * @return array<int, MetadataDocuments\DevicesModule\ChannelDynamicProperty|MetadataDocuments\DevicesModule\ChannelMappedProperty>
+	 * @return array<int, DevicesDocuments\Channels\Properties\Dynamic|DevicesDocuments\Channels\Properties\Mapped>
 	 *
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 */
-	public function getOpenings(MetadataDocuments\DevicesModule\Device $device): array
+	public function getSensors(DevicesDocuments\Devices\Device $device): array
 	{
-		$findChannelQuery = new DevicesQueries\Configuration\FindChannels();
+		$findChannelQuery = new Queries\Configuration\FindSensorChannels();
 		$findChannelQuery->forDevice($device);
-		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::OPENINGS);
-		$findChannelQuery->byType(Entities\Channels\Sensors::TYPE);
+		$findChannelQuery->byIdentifier(Types\ChannelIdentifier::SENSORS);
 
-		$channel = $this->channelsConfigurationRepository->findOneBy($findChannelQuery);
+		$channel = $this->channelsConfigurationRepository->findOneBy(
+			$findChannelQuery,
+			Documents\Channels\Sensors::class,
+		);
 
 		if ($channel === null) {
 			return [];
@@ -556,55 +559,135 @@ final class Device
 
 		return array_filter(
 			$properties,
-			static fn (MetadataDocuments\DevicesModule\ChannelProperty $property): bool =>
+			static fn (DevicesDocuments\Channels\Properties\Property $property): bool =>
 				(
-					$property instanceof MetadataDocuments\DevicesModule\ChannelDynamicProperty
-					|| $property instanceof MetadataDocuments\DevicesModule\ChannelMappedProperty
-				) && Utils\Strings::startsWith(
-					$property->getIdentifier(),
-					Types\ChannelPropertyIdentifier::OPENING_SENSOR,
+					$property instanceof DevicesDocuments\Channels\Properties\Dynamic
+					|| $property instanceof DevicesDocuments\Channels\Properties\Mapped
+				) && (
+					Utils\Strings::startsWith(
+						$property->getIdentifier(),
+						Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR->value,
+					)
+					|| Utils\Strings::startsWith(
+						$property->getIdentifier(),
+						Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR->value,
+					)
+					|| Utils\Strings::startsWith(
+						$property->getIdentifier(),
+						Types\ChannelPropertyIdentifier::OPENING_SENSOR->value,
+					)
+					|| Utils\Strings::startsWith(
+						$property->getIdentifier(),
+						Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR->value,
+					)
 				),
 		);
 	}
 
 	/**
-	 * @return array<string>
+	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
+	 */
+	public function hasRoomTemperatureSensors(DevicesDocuments\Devices\Device $device): bool
+	{
+		return array_filter(
+			$this->getSensors($device),
+			static fn ($sensor): bool => Utils\Strings::startsWith(
+				$sensor->getIdentifier(),
+				Types\ChannelPropertyIdentifier::ROOM_TEMPERATURE_SENSOR->value,
+			)
+		) !== [];
+	}
+
+	/**
+	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
+	 */
+	public function hasFloorTemperatureSensors(DevicesDocuments\Devices\Device $device): bool
+	{
+		return array_filter(
+			$this->getSensors($device),
+			static fn ($sensor): bool => Utils\Strings::startsWith(
+				$sensor->getIdentifier(),
+				Types\ChannelPropertyIdentifier::FLOOR_TEMPERATURE_SENSOR->value,
+			)
+		) !== [];
+	}
+
+	/**
+	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
+	 */
+	public function hasOpeningsSensors(DevicesDocuments\Devices\Device $device): bool
+	{
+		return array_filter(
+			$this->getSensors($device),
+			static fn ($sensor): bool => Utils\Strings::startsWith(
+				$sensor->getIdentifier(),
+				Types\ChannelPropertyIdentifier::OPENING_SENSOR->value,
+			)
+		) !== [];
+	}
+
+	/**
+	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
+	 */
+	public function hasRoomHumiditySensors(DevicesDocuments\Devices\Device $device): bool
+	{
+		return array_filter(
+			$this->getSensors($device),
+			static fn ($sensor): bool => Utils\Strings::startsWith(
+				$sensor->getIdentifier(),
+				Types\ChannelPropertyIdentifier::ROOM_HUMIDITY_SENSOR->value,
+			)
+		) !== [];
+	}
+
+	/**
+	 * @return array<Types\HvacMode>
 	 *
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	public function getHvacModes(MetadataDocuments\DevicesModule\Device $device): array
+	public function getHvacModes(DevicesDocuments\Devices\Device $device): array
 	{
 		$format = $this->getHvacMode($device)?->getFormat();
 
-		if (!$format instanceof MetadataValueObjects\StringEnumFormat) {
+		if (!$format instanceof MetadataFormats\StringEnum) {
 			return [];
 		}
 
 		return array_map(
-			static fn (string $item): string => Types\HvacMode::get($item)->getValue(),
+			static fn (string $item): Types\HvacMode => Types\HvacMode::from($item),
 			$format->toArray(),
 		);
 	}
 
 	/**
-	 * @return array<string>
+	 * @return array<Types\Preset>
 	 *
 	 * @throws DevicesExceptions\InvalidState
+	 * @throws Exceptions\InvalidArgument
 	 * @throws Exceptions\InvalidState
 	 * @throws MetadataExceptions\InvalidArgument
+	 * @throws TypeError
+	 * @throws ValueError
 	 */
-	public function getPresetModes(MetadataDocuments\DevicesModule\Device $device): array
+	public function getPresetModes(DevicesDocuments\Devices\Device $device): array
 	{
 		$format = $this->getPresetMode($device)?->getFormat();
 
-		if (!$format instanceof MetadataValueObjects\StringEnumFormat) {
+		if (!$format instanceof MetadataFormats\StringEnum) {
 			return [];
 		}
 
 		return array_map(
-			static fn (string $item): string => Types\Preset::get($item)->getValue(),
+			static fn (string $item): Types\Preset => Types\Preset::from($item),
 			$format->toArray(),
 		);
 	}
